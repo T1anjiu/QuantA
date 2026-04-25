@@ -60,7 +60,7 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	code := prefix + pureSymbol
 
 	// 腾讯代理接口：支持 500 条 K 线及前复权
-	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?_var=kline_day&param=%s,day,,,1100,qfq", code)
+	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?_var=kline_day¶m=%s,day,,,1100,qfq", code)
 	
 	resp, err := http.Get(url)
 	if err != nil {
@@ -119,17 +119,11 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	return dates, closes, nil
 }
 
-// RunBacktest 函数保持不变...
-func (a *App) RunBacktest(symbol string, initialCapital float64, startDate string, endDate string, fastPeriod int, slowPeriod int, signalPeriod int) (BacktestResult, error) {
+// RunBacktest 支持多指标
+func (a *App) RunBacktest(symbol string, initialCapital float64, startDate string, endDate string, indicator string, param1 int, param2 int, param3 int) (BacktestResult, error) {
 	// 输入验证
 	if initialCapital <= 0 {
 		return BacktestResult{}, fmt.Errorf("初始资金必须大于0")
-	}
-	if fastPeriod <= 0 || slowPeriod <= 0 || signalPeriod <= 0 {
-		return BacktestResult{}, fmt.Errorf("MACD参数必须大于0")
-	}
-	if fastPeriod >= slowPeriod {
-		return BacktestResult{}, fmt.Errorf("快线周期必须小于慢线周期")
 	}
 
 	allDates, allCloses, err := a.fetchStockData(symbol)
@@ -139,6 +133,31 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 
 	fStart := strings.ReplaceAll(startDate, "-", "")
 	fEnd := strings.ReplaceAll(endDate, "-", "")
+
+	// 根据指标类型执行不同的策略
+	if indicator == "macd" {
+		return a.runMACD(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+	} else if indicator == "boll" {
+		return a.runBOLL(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2)
+	} else if indicator == "rsi" {
+		return a.runRSI(allDates, allCloses, fStart, fEnd, initialCapital, param1)
+	} else if indicator == "sma" {
+		return a.runSMA(allDates, allCloses, fStart, fEnd, initialCapital, param1)
+	} else if indicator == "kdj" {
+		return a.runKDJ(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+	}
+
+	return BacktestResult{}, fmt.Errorf("不支持的指标: %s", indicator)
+}
+
+// MACD策略
+func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, fastPeriod int, slowPeriod int, signalPeriod int) (BacktestResult, error) {
+	if fastPeriod <= 0 || slowPeriod <= 0 || signalPeriod <= 0 {
+		return BacktestResult{}, fmt.Errorf("MACD参数必须大于0")
+	}
+	if fastPeriod >= slowPeriod {
+		return BacktestResult{}, fmt.Errorf("快线周期必须小于慢线周期")
+	}
 
 	dif, dea, _ := talib.Macd(allCloses, fastPeriod, slowPeriod, signalPeriod)
 
@@ -168,6 +187,313 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 				capital = 0
 				logs = append(logs, TradeLog{Date: allDates[i], Action: "买入", Price: allCloses[i]})
 			} else if position > 0 && dif[i] < dea[i] && dif[i-1] >= dea[i-1] {
+				capital = position * allCloses[i]
+				position = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "卖出", Price: allCloses[i]})
+			}
+		}
+
+		val := capital
+		if position > 0 {
+			val = position * allCloses[i]
+		}
+		filteredDates = append(filteredDates, allDates[i])
+		filteredChart = append(filteredChart, val)
+	}
+
+	if logs == nil { logs = []TradeLog{} }
+	finalVal := initialCapital
+	if len(filteredChart) > 0 {
+		finalVal = filteredChart[len(filteredChart)-1]
+	}
+
+	return BacktestResult{
+		Logs:         logs,
+		FinalCapital: finalVal,
+		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
+		ChartData:    filteredChart,
+		Dates:        filteredDates,
+	}, nil
+}
+
+// BOLL策略（价格突破下轨买入，突破上轨卖出）
+func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int, stdDev int) (BacktestResult, error) {
+	if period <= 0 {
+		return BacktestResult{}, fmt.Errorf("BOLL周期必须大于0")
+	}
+
+	upper, _, lower := talib.BBands(allCloses, period, float64(stdDev), float64(stdDev), 0)
+
+	var logs []TradeLog
+	var filteredDates []string
+	var filteredChart []float64
+
+	capital := initialCapital
+	position := 0.0
+
+	startIndex := 0
+	for i, d := range allDates {
+		if d >= fStart {
+			startIndex = i
+			break
+		}
+	}
+
+	for i := startIndex; i < len(allCloses); i++ {
+		if fEnd != "" && allDates[i] > fEnd {
+			break
+		}
+
+		// 跳过前period个数据（布林带计算需要）
+		if i < period {
+			val := capital
+			if position > 0 {
+				val = position * allCloses[i]
+			}
+			filteredDates = append(filteredDates, allDates[i])
+			filteredChart = append(filteredChart, val)
+			continue
+		}
+
+		if upper[i] != 0 && lower[i] != 0 {
+			// 价格跌破下轨买入
+			if position == 0 && allCloses[i] < lower[i] {
+				position = capital / allCloses[i]
+				capital = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "买入", Price: allCloses[i]})
+			} else if position > 0 && allCloses[i] > upper[i] {
+				// 价格突破上轨卖出
+				capital = position * allCloses[i]
+				position = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "卖出", Price: allCloses[i]})
+			}
+		}
+
+		val := capital
+		if position > 0 {
+			val = position * allCloses[i]
+		}
+		filteredDates = append(filteredDates, allDates[i])
+		filteredChart = append(filteredChart, val)
+	}
+
+	if logs == nil { logs = []TradeLog{} }
+	finalVal := initialCapital
+	if len(filteredChart) > 0 {
+		finalVal = filteredChart[len(filteredChart)-1]
+	}
+
+	return BacktestResult{
+		Logs:         logs,
+		FinalCapital: finalVal,
+		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
+		ChartData:    filteredChart,
+		Dates:        filteredDates,
+	}, nil
+}
+
+// RSI策略（RSI < 30买入，RSI > 70卖出）
+func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int) (BacktestResult, error) {
+	if period <= 0 {
+		return BacktestResult{}, fmt.Errorf("RSI周期必须大于0")
+	}
+
+	rsi := talib.Rsi(allCloses, period)
+
+	var logs []TradeLog
+	var filteredDates []string
+	var filteredChart []float64
+
+	capital := initialCapital
+	position := 0.0
+
+	startIndex := 0
+	for i, d := range allDates {
+		if d >= fStart {
+			startIndex = i
+			break
+		}
+	}
+
+	for i := startIndex; i < len(allCloses); i++ {
+		if fEnd != "" && allDates[i] > fEnd {
+			break
+		}
+
+		// 跳过前period个数据（RSI计算需要）
+		if i < period {
+			val := capital
+			if position > 0 {
+				val = position * allCloses[i]
+			}
+			filteredDates = append(filteredDates, allDates[i])
+			filteredChart = append(filteredChart, val)
+			continue
+		}
+
+		if rsi[i] != 0 {
+			// RSI < 30买入（超卖）
+			if position == 0 && rsi[i] < 30 {
+				position = capital / allCloses[i]
+				capital = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "买入", Price: allCloses[i]})
+			} else if position > 0 && rsi[i] > 70 {
+				// RSI > 70卖出（超买）
+				capital = position * allCloses[i]
+				position = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "卖出", Price: allCloses[i]})
+			}
+		}
+
+		val := capital
+		if position > 0 {
+			val = position * allCloses[i]
+		}
+		filteredDates = append(filteredDates, allDates[i])
+		filteredChart = append(filteredChart, val)
+	}
+
+	if logs == nil { logs = []TradeLog{} }
+	finalVal := initialCapital
+	if len(filteredChart) > 0 {
+		finalVal = filteredChart[len(filteredChart)-1]
+	}
+
+	return BacktestResult{
+		Logs:         logs,
+		FinalCapital: finalVal,
+		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
+		ChartData:    filteredChart,
+		Dates:        filteredDates,
+	}, nil
+}
+
+// SMA策略（简单移动平均线交叉）
+func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int) (BacktestResult, error) {
+	if period <= 0 {
+		return BacktestResult{}, fmt.Errorf("SMA周期必须大于0")
+	}
+
+	sma := talib.Sma(allCloses, period)
+
+	var logs []TradeLog
+	var filteredDates []string
+	var filteredChart []float64
+
+	capital := initialCapital
+	position := 0.0
+
+	startIndex := 0
+	for i, d := range allDates {
+		if d >= fStart {
+			startIndex = i
+			break
+		}
+	}
+
+	for i := startIndex; i < len(allCloses); i++ {
+		if fEnd != "" && allDates[i] > fEnd {
+			break
+		}
+
+		// 跳过前period个数据（SMA计算需要）
+		if i < period {
+			val := capital
+			if position > 0 {
+				val = position * allCloses[i]
+			}
+			filteredDates = append(filteredDates, allDates[i])
+			filteredChart = append(filteredChart, val)
+			continue
+		}
+
+		if sma[i] != 0 {
+			// 价格上穿SMA买入
+			if position == 0 && allCloses[i] > sma[i] && allCloses[i-1] <= sma[i-1] {
+				position = capital / allCloses[i]
+				capital = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "买入", Price: allCloses[i]})
+			} else if position > 0 && allCloses[i] < sma[i] && allCloses[i-1] >= sma[i-1] {
+				// 价格下穿SMA卖出
+				capital = position * allCloses[i]
+				position = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "卖出", Price: allCloses[i]})
+			}
+		}
+
+		val := capital
+		if position > 0 {
+			val = position * allCloses[i]
+		}
+		filteredDates = append(filteredDates, allDates[i])
+		filteredChart = append(filteredChart, val)
+	}
+
+	if logs == nil { logs = []TradeLog{} }
+	finalVal := initialCapital
+	if len(filteredChart) > 0 {
+		finalVal = filteredChart[len(filteredChart)-1]
+	}
+
+	return BacktestResult{
+		Logs:         logs,
+		FinalCapital: finalVal,
+		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
+		ChartData:    filteredChart,
+		Dates:        filteredDates,
+	}, nil
+}
+
+// KDJ策略（K上穿D买入，K下穿D卖出）
+func (a *App) runKDJ(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int, kSmoothing int, dSmoothing int) (BacktestResult, error) {
+	if period <= 0 {
+		return BacktestResult{}, fmt.Errorf("KDJ周期必须大于0")
+	}
+	if kSmoothing <= 0 || dSmoothing <= 0 {
+		return BacktestResult{}, fmt.Errorf("KDJ平滑参数必须大于0")
+	}
+
+	slowK, slowD := talib.Stoch(allCloses, allCloses, allCloses, period, kSmoothing, talib.SMA, dSmoothing, talib.SMA)
+
+	var logs []TradeLog
+	var filteredDates []string
+	var filteredChart []float64
+
+	capital := initialCapital
+	position := 0.0
+
+	startIndex := 0
+	for i, dt := range allDates {
+		if dt >= fStart {
+			startIndex = i
+			break
+		}
+	}
+
+	for i := startIndex; i < len(allCloses); i++ {
+		if fEnd != "" && allDates[i] > fEnd {
+			break
+		}
+
+		// 跳过前period+参数周期的数据（KDJ计算需要）
+		if i < period+kSmoothing+dSmoothing {
+			val := capital
+			if position > 0 {
+				val = position * allCloses[i]
+			}
+			filteredDates = append(filteredDates, allDates[i])
+			filteredChart = append(filteredChart, val)
+			continue
+		}
+
+		if i > 0 && slowK[i] != 0 && slowD[i] != 0 && slowK[i-1] != 0 && slowD[i-1] != 0 {
+			// K上穿D买入
+			if position == 0 && slowK[i] > slowD[i] && slowK[i-1] <= slowD[i-1] {
+				position = capital / allCloses[i]
+				capital = 0
+				logs = append(logs, TradeLog{Date: allDates[i], Action: "买入", Price: allCloses[i]})
+			} else if position > 0 && slowK[i] < slowD[i] && slowK[i-1] >= slowD[i-1] {
+				// K下穿D卖出
 				capital = position * allCloses[i]
 				position = 0
 				logs = append(logs, TradeLog{Date: allDates[i], Action: "卖出", Price: allCloses[i]})

@@ -21,7 +21,8 @@ style.innerHTML = `
     .input-group { padding: 20px; display: flex; flex-direction: column; gap: 15px; flex: 1; overflow-y: auto; }
     
     .param-box { padding: 12px; background: rgba(59,130,246,0.05); border: 1px dashed var(--border); border-radius: 8px; }
-    .input-field { width: 100%; background: var(--bg-app); border: 1px solid var(--border); color: var(--text-main); padding: 8px; border-radius: 6px; box-sizing: border-box; }
+    .input-field, select.input-field { width: 100%; background: var(--bg-app); border: 1px solid var(--border); color: var(--text-main); padding: 8px; border-radius: 6px; box-sizing: border-box; }
+    select.input-field { cursor: pointer; }
 
     /* 新增 placeholder 颜色：更淡，避免误认为已填入内容 */
     .dark-theme .input-field::placeholder {
@@ -66,16 +67,25 @@ document.querySelector('#app').innerHTML = `
                 <button id="themeToggle" style="font-size:14px; background:transparent; border:none; cursor:pointer; color:var(--text-main);">☀️ 切换 🌙</button>
             </div>
             <div class="input-group">
+                <label style="font-size:12px; color:gray;">技术指标</label>
+                <select id="inIndicator" class="input-field">
+                    <option value="macd">MACD (异同移动平均线)</option>
+                    <option value="boll">BOLL (布林带)</option>
+                    <option value="rsi">RSI (相对强弱指标)</option>
+                    <option value="sma">SMA (简单移动平均线)</option>
+                    <option value="kdj">KDJ (随机指标)</option>
+                </select>
+
                 <label style="font-size:12px; color:gray;">标的配置</label>
                 <input id="inCode" placeholder="股票代码" class="input-field">
                 <input id="inCap" placeholder="初始资金" class="input-field">
                 
-                <div class="param-box">
+                <div id="param-box" class="param-box">
                     <label style="font-size:12px; color:var(--accent);">MACD 参数</label>
                     <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; margin-top:5px;">
-                        <input id="inFast" placeholder="快线" value="12" class="input-field" title="快线">
-                        <input id="inSlow" placeholder="慢线" value="26" class="input-field" title="慢线">
-                        <input id="inSig" placeholder="信号" value="9" class="input-field" title="信号">
+                        <input id="inParam1" placeholder="快线" value="12" class="input-field" title="快线">
+                        <input id="inParam2" placeholder="慢线" value="26" class="input-field" title="慢线">
+                        <input id="inParam3" placeholder="信号" value="9" class="input-field" title="信号">
                     </div>
                 </div>
 
@@ -196,19 +206,79 @@ function renderChart(res) {
     myChart.setOption(option);
 }
 
+// 动态更新参数框
+function updateParamBox(indicator) {
+    const paramBox = document.getElementById('param-box');
+    
+    switch(indicator) {
+        case 'macd':
+            paramBox.innerHTML = `
+                <label style="font-size:12px; color:var(--accent);">MACD 参数</label>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; margin-top:5px;">
+                    <input id="inParam1" placeholder="快线" value="12" class="input-field" title="快线">
+                    <input id="inParam2" placeholder="慢线" value="26" class="input-field" title="慢线">
+                    <input id="inParam3" placeholder="信号" value="9" class="input-field" title="信号">
+                </div>
+            `;
+            break;
+        case 'boll':
+            paramBox.innerHTML = `
+                <label style="font-size:12px; color:var(--accent);">BOLL 参数</label>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:5px;">
+                    <input id="inParam1" placeholder="周期" value="20" class="input-field" title="周期">
+                    <input id="inParam2" placeholder="标准差" value="2" class="input-field" title="标准差">
+                </div>
+            `;
+            break;
+        case 'rsi':
+            paramBox.innerHTML = `
+                <label style="font-size:12px; color:var(--accent);">RSI 参数</label>
+                <div style="display:grid; grid-template-columns:1fr; gap:5px; margin-top:5px;">
+                    <input id="inParam1" placeholder="周期" value="14" class="input-field" title="周期">
+                </div>
+            `;
+            break;
+        case 'sma':
+            paramBox.innerHTML = `
+                <label style="font-size:12px; color:var(--accent);">SMA 参数</label>
+                <div style="display:grid; grid-template-columns:1fr; gap:5px; margin-top:5px;">
+                    <input id="inParam1" placeholder="周期" value="20" class="input-field" title="周期">
+                </div>
+            `;
+            break;
+        case 'kdj':
+            paramBox.innerHTML = `
+                <label style="font-size:12px; color:var(--accent);">KDJ 参数</label>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; margin-top:5px;">
+                    <input id="inParam1" placeholder="周期" value="9" class="input-field" title="周期">
+                    <input id="inParam2" placeholder="平滑K" value="3" class="input-field" title="平滑K">
+                    <input id="inParam3" placeholder="平滑D" value="3" class="input-field" title="平滑D">
+                </div>
+            `;
+            break;
+    }
+}
+
+// 指标切换监听器
+document.getElementById('inIndicator').onchange = function() {
+    updateParamBox(this.value);
+};
+
 // 点击运行（处理收益颜色和符号，以及最终资产数字颜色）
 document.getElementById('runBtn').onclick = async () => {
     const btn = document.getElementById('runBtn');
     btn.innerText = "正在运行...";
     try {
+        const indicator = document.getElementById('inIndicator').value;
         const res = await RunBacktest(
             document.getElementById('inCode').value,
             parseFloat(document.getElementById('inCap').value),
             document.getElementById('inStart').value,
             document.getElementById('inEnd').value,
-            parseInt(document.getElementById('inFast').value),
-            parseInt(document.getElementById('inSlow').value),
-            parseInt(document.getElementById('inSig').value)
+            indicator,
+            parseInt(document.getElementById('inParam1').value),
+            parseInt(document.getElementById('inParam2') ? document.getElementById('inParam2').value : 0),
+            parseInt(document.getElementById('inParam3') ? document.getElementById('inParam3').value : 0)
         );
         lastRes = res;
 
