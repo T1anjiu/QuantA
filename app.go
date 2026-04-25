@@ -54,7 +54,10 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("读取响应失败: %v", err)
+	}
 	content := string(body)
 
 	// 处理 JSONP 格式
