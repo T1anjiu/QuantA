@@ -98,8 +98,8 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 		klines, _ = stockData["day"].([]interface{})
 	}
 
-	var dates []string
-	var closes []float64
+	dates := make([]string, 0, len(klines))
+	closes := make([]float64, 0, len(klines))
 	for _, k := range klines {
 		line, _ := k.([]interface{})
 		if len(line) < 3 { continue }
