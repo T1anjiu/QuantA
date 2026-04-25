@@ -60,7 +60,7 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	code := prefix + pureSymbol
 
 	// 腾讯代理接口：支持 500 条 K 线及前复权
-	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?_var=kline_day¶m=%s,day,,,1100,qfq", code)
+	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?_var=kline_day&param=%s,day,,,1100,qfq", code)
 	
 	resp, err := http.Get(url)
 	if err != nil {

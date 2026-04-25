@@ -77,8 +77,8 @@ document.querySelector('#app').innerHTML = `
                 </select>
 
                 <label style="font-size:12px; color:gray;">标的配置</label>
-                <input id="inCode" placeholder="股票代码" class="input-field">
-                <input id="inCap" placeholder="初始资金" class="input-field">
+                <input id="inCode" placeholder="股票代码" value="600000" class="input-field">
+                <input id="inCap" placeholder="初始资金" value="10000" class="input-field">
                 
                 <div id="param-box" class="param-box">
                     <label style="font-size:12px; color:var(--accent);">MACD 参数</label>
