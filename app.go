@@ -35,8 +35,22 @@ func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 // 核心函数：回归腾讯 proxy 接口
 func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	pureSymbol := strings.TrimSpace(symbol)
+	if pureSymbol == "" {
+		return nil, nil, fmt.Errorf("股票代码不能为空")
+	}
+	
 	pureSymbol = strings.ReplaceAll(pureSymbol, ".SH", "")
 	pureSymbol = strings.ReplaceAll(pureSymbol, ".SZ", "")
+	
+	// 验证股票代码格式：只允许数字，长度6位
+	if len(pureSymbol) != 6 {
+		return nil, nil, fmt.Errorf("股票代码格式错误（必须为6位数字）: %s", symbol)
+	}
+	for _, c := range pureSymbol {
+		if c < '0' || c > '9' {
+			return nil, nil, fmt.Errorf("股票代码包含非法字符（只允许数字）: %s", symbol)
+		}
+	}
 	
 	// 判定前缀
 	prefix := "sz"
@@ -107,6 +121,17 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 
 // RunBacktest 函数保持不变...
 func (a *App) RunBacktest(symbol string, initialCapital float64, startDate string, endDate string, fastPeriod int, slowPeriod int, signalPeriod int) (BacktestResult, error) {
+	// 输入验证
+	if initialCapital <= 0 {
+		return BacktestResult{}, fmt.Errorf("初始资金必须大于0")
+	}
+	if fastPeriod <= 0 || slowPeriod <= 0 || signalPeriod <= 0 {
+		return BacktestResult{}, fmt.Errorf("MACD参数必须大于0")
+	}
+	if fastPeriod >= slowPeriod {
+		return BacktestResult{}, fmt.Errorf("快线周期必须小于慢线周期")
+	}
+
 	allDates, allCloses, err := a.fetchStockData(symbol)
 	if err != nil {
 		return BacktestResult{}, err
