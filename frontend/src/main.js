@@ -1,4 +1,4 @@
-import * as echarts from 'echarts';
+import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
 import { RunBacktest } from '../wailsjs/go/main/App';
 
 // 1. 注入 CSS 样式（仅修改了颜色变量，买入红、卖出绿）
@@ -47,12 +47,12 @@ style.innerHTML = `
     th { font-weight: 700; color: var(--text-main); }
     
     /* 平滑主题切换过渡 */
-* {
-    transition: background-color 0.3s ease, 
-                color 0.3s ease, 
-                border-color 0.3s ease, 
-                box-shadow 0.3s ease;
-}
+    * {
+        transition: background-color 0.3s ease, 
+                    color 0.3s ease, 
+                    border-color 0.3s ease, 
+                    box-shadow 0.3s ease;
+    }
     
     .btn-run { margin: 15px; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
 `;
@@ -77,8 +77,8 @@ document.querySelector('#app').innerHTML = `
                 </select>
 
                 <label style="font-size:12px; color:gray;">标的配置</label>
-                <input id="inCode" placeholder="股票代码" value="600000" class="input-field">
-                <input id="inCap" placeholder="初始资金" value="10000" class="input-field">
+                <input id="inCode" placeholder="股票代码" class="input-field">
+                <input id="inCap" placeholder="初始资金" class="input-field">
                 
                 <div id="param-box" class="param-box">
                     <label style="font-size:12px; color:var(--accent);">MACD 参数</label>
@@ -133,77 +133,79 @@ function renderLogs(logs) {
     }).join('');
 }
 
-// 渲染图表（买入红圈带“买”字，卖出绿圈带“卖”字）
+// 渲染图表（使用Lightweight Charts）
 function renderChart(res) {
-    if (myChart) myChart.dispose();
-    myChart = echarts.init(document.getElementById('chart-box'));
+    if (myChart) myChart.remove();
+
+    const container = document.getElementById('chart-box');
+    if (!container) return;
+
     const isLight = currentTheme === 'light';
-    
-    const option = {
-        backgroundColor: 'transparent',
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'shadow' },
-            formatter: function(params) {
-                const data = params[0];
-                return `${data.name}<br/>净值：¥ ${data.value.toFixed(2)}`;
-            }
+    const textColor = isLight ? '#24292f' : '#c9d1d9';
+    const gridColor = isLight ? 'rgba(0, 0, 0, 0.1)' : 'rgba(128, 128, 128, 0.1)';
+
+    const chartOptions = {
+        width: container.clientWidth,
+        height: container.clientHeight,
+        layout: {
+            background: { type: ColorType.Solid, color: 'transparent' },
+            textColor: textColor,
         },
-        grid: { top: 50, bottom: 80, left: 40, right: 60, containLabel: true },
-        xAxis: {
-            type: 'category',
-            data: res.dates,
-            axisLabel: { color: 'gray', rotate: 30, margin: 10 },
-            axisLine: { lineStyle: { color: 'var(--border)' } },
-            axisTick: { show: false }
+        grid: {
+            vertLines: { color: gridColor, style: 1, visible: true },
+            horzLines: { color: gridColor, style: 1, visible: true },
         },
-        yAxis: {
-            type: 'value',
-            scale: true,
-            position: 'right',
-            axisLabel: { color: 'gray' },
-            splitLine: { show: true, lineStyle: { type: 'dashed', color: 'rgba(128,128,128,0.3)' } }
+        rightPriceScale: {
+            borderColor: 'transparent',
+            visible: true,
         },
-        dataZoom: [
-            { type: 'inside', start: 0, end: 100 },
-            { type: 'slider', bottom: 20, height: 20, borderColor: 'transparent', backgroundColor: 'rgba(128,128,128,0.2)' }
-        ],
-        series: [{
-            name: '账户净值',
-            type: 'line',
-            data: res.chart_data,
-            symbol: 'none',
-            lineStyle: { color: '#3b82f6', width: 2 },
-            areaStyle: {
-                color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                    { offset: 0, color: 'rgba(59,130,246,0.3)' },
-                    { offset: 1, color: 'transparent' }
-                ])
-            },
-            markPoint: {
-                symbol: 'circle',
-                symbolSize: 18,  // 增大以容纳文字
-                data: res.logs.map(l => ({
-                    coord: [l.date, res.chart_data[res.dates.indexOf(l.date)]],
-                    value: l.action === '买入' || l.action.toUpperCase() === 'BUY' ? '买' : '卖',
-                    itemStyle: {
-                        color: (l.action === '买入' || l.action.toUpperCase() === 'BUY') ? '#ef4444' : '#10b981',  // 买入红、卖出绿
-                        borderColor: '#ffffff',
-                        borderWidth: 1
-                    }
-                })),
-                label: {
-                    show: true,
-                    position: 'inside',
-                    color: '#ffffff',
-                    fontSize: 10,
-                    fontWeight: 'bold',
-                    formatter: (params) => params.value  // 显示“买”或“卖”
-                }
-            }
-        }]
+        timeScale: {
+            borderColor: 'transparent',
+            timeVisible: true,
+            secondsVisible: false,
+        },
+        crosshair: {
+            mode: CrosshairMode.Normal,
+        },
     };
-    myChart.setOption(option);
+
+    myChart = createChart(container, chartOptions);
+
+    const areaSeriesOptions = {
+        lineColor: '#3b82f6',
+        topColor: 'rgba(59,130,246,0.3)',
+        bottomColor: 'transparent',
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+    };
+
+    const areaSeries = myChart.addAreaSeries(areaSeriesOptions);
+
+    const chartData = res.dates.map((date, i) => ({
+        time: date.substring(0, 4) + '-' + date.substring(4, 6) + '-' + date.substring(6, 8),
+        value: res.chart_data[i],
+    }));
+    
+    areaSeries.setData(chartData);
+
+    // 使用 markers API
+    const markers = res.logs.map(log => {
+        const isBuy = log.action === '买入' || log.action.toUpperCase() === 'BUY';
+        const dateStr = log.date;
+        const formattedDate = dateStr.substring(0, 4) + '-' + dateStr.substring(4, 6) + '-' + dateStr.substring(6, 8);
+        return {
+            time: formattedDate,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isBuy ? '#ef4444' : '#10b981',
+            shape: isBuy ? 'arrowUp' : 'arrowDown',
+            text: isBuy ? '买' : '卖',
+        };
+    });
+    
+    areaSeries.setMarkers(markers);
+
+    myChart.timeScale().fitContent();
 }
 
 // 动态更新参数框
@@ -312,9 +314,18 @@ document.getElementById('themeToggle').onclick = () => {
     const capElement = document.getElementById('resCap');
     if (lastRes) {
         capElement.style.color = currentTheme === 'light' ? '#000000' : '';
+        renderChart(lastRes);
     }
-
-    if (lastRes) renderChart(lastRes);
 };
 
-window.onresize = () => myChart && myChart.resize();
+window.onresize = () => {
+    if (myChart) {
+        const container = document.getElementById('chart-box');
+        if (container) {
+            myChart.applyOptions({
+                width: container.clientWidth,
+                height: container.clientHeight,
+            });
+        }
+    }
+};
