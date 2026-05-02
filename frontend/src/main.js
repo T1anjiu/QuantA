@@ -285,10 +285,10 @@ function renderChart(res) {
                 position: isBuy ? 'belowBar' : 'aboveBar',
                 color: isBuy ? '#ef4444' : '#10b981',
                 shape: isBuy ? 'arrowUp' : 'arrowDown',
-                text: isBuy ? '买' : '卖',
+                text: isBuy ? `买 ${log.price.toFixed(2)}` : `卖 ${log.price.toFixed(2)}`,
             };
         });
-
+        
         areaSeries.setMarkers(markers);
     } else if (chartType === 'candlestick') {
         // K线图
@@ -306,6 +306,21 @@ function renderChart(res) {
         const period = document.getElementById('klinePeriod').value;
         const ohlcData = aggregateOHLC(res.ohlc_data, period);
         candleSeries.setData(ohlcData);
+
+        // 在K线图上添加买卖标记
+        const markers = res.logs.map(log => {
+            const isBuy = log.action === '买入' || log.action.toUpperCase() === 'BUY';
+            const dateStr = log.date;
+            const formattedDate = dateStr.substring(0, 4) + '-' + dateStr.substring(4, 6) + '-' + dateStr.substring(6, 8);
+            return {
+                time: formattedDate,
+                position: isBuy ? 'belowBar' : 'aboveBar',
+                color: isBuy ? '#ef4444' : '#10b981',
+                shape: isBuy ? 'arrowUp' : 'arrowDown',
+                text: isBuy ? `买 ${log.price.toFixed(2)}` : `卖 ${log.price.toFixed(2)}`,
+            };
+        });
+        candleSeries.setMarkers(markers);
     }
 
     myChart.timeScale().fitContent();
