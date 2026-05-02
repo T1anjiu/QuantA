@@ -14,7 +14,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "量化分析回测终端",
+		Title:  "QuantA",
 		Width:  1200,
 		Height: 800,
 		AssetServer: &assetserver.Options{
