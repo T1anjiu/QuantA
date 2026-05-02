@@ -1,5 +1,25 @@
 export namespace main {
 	
+	export class OHLCOne {
+	    date: string;
+	    open: number;
+	    high: number;
+	    low: number;
+	    close: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OHLCOne(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.open = source["open"];
+	        this.high = source["high"];
+	        this.low = source["low"];
+	        this.close = source["close"];
+	    }
+	}
 	export class TradeLog {
 	    date: string;
 	    action: string;
@@ -29,6 +49,7 @@ export namespace main {
 	    win_rate: number;
 	    total_trades: number;
 	    profit_trades: number;
+	    ohlc_data?: OHLCOne[];
 	
 	    static createFrom(source: any = {}) {
 	        return new BacktestResult(source);
@@ -48,6 +69,7 @@ export namespace main {
 	        this.win_rate = source["win_rate"];
 	        this.total_trades = source["total_trades"];
 	        this.profit_trades = source["profit_trades"];
+	        this.ohlc_data = this.convertValues(source["ohlc_data"], OHLCOne);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -68,6 +90,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 
 }
 

@@ -18,6 +18,22 @@ type TradeLog struct {
 	Price  float64 `json:"price"`
 }
 
+type StockOHLC struct {
+	Dates  []string
+	Opens  []float64
+	Highs  []float64
+	Lows   []float64
+	Closes []float64
+}
+
+type OHLCOne struct {
+	Date  string  `json:"date"`
+	Open  float64 `json:"open"`
+	High  float64 `json:"high"`
+	Low   float64 `json:"low"`
+	Close float64 `json:"close"`
+}
+
 type BacktestResult struct {
 	Logs         []TradeLog `json:"logs"`
 	FinalCapital float64    `json:"final_capital"`
@@ -31,6 +47,7 @@ type BacktestResult struct {
 	WinRate      float64    `json:"win_rate"`
 	TotalTrades  int        `json:"total_trades"`
 	ProfitTrades int        `json:"profit_trades"`
+	OHLCData     []OHLCOne  `json:"ohlc_data,omitempty"`
 }
 
 // 计算日收益率序列
@@ -162,10 +179,11 @@ func NewApp() *App { return &App{} }
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
 // 核心函数：回归腾讯 proxy 接口
-func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
+func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
+	result := StockOHLC{}
 	pureSymbol := strings.TrimSpace(symbol)
 	if pureSymbol == "" {
-		return nil, nil, fmt.Errorf("股票代码不能为空")
+		return result, fmt.Errorf("股票代码不能为空")
 	}
 	
 	pureSymbol = strings.ReplaceAll(pureSymbol, ".SH", "")
@@ -173,11 +191,11 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	
 	// 验证股票代码格式：只允许数字，长度6位
 	if len(pureSymbol) != 6 {
-		return nil, nil, fmt.Errorf("股票代码格式错误（必须为6位数字）: %s", symbol)
+		return result, fmt.Errorf("股票代码格式错误（必须为6位数字）: %s", symbol)
 	}
 	for _, c := range pureSymbol {
 		if c < '0' || c > '9' {
-			return nil, nil, fmt.Errorf("股票代码包含非法字符（只允许数字）: %s", symbol)
+			return result, fmt.Errorf("股票代码包含非法字符（只允许数字）: %s", symbol)
 		}
 	}
 	
@@ -193,13 +211,13 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, nil, err
+		return result, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取响应失败: %v", err)
+		return result, fmt.Errorf("读取响应失败: %v", err)
 	}
 	content := string(body)
 
@@ -210,13 +228,13 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
-		return nil, nil, fmt.Errorf("解析失败: %v", err)
+		return result, fmt.Errorf("解析失败: %v", err)
 	}
 
 	data, _ := raw["data"].(map[string]interface{})
 	stockData, ok := data[code].(map[string]interface{})
 	if !ok {
-		return nil, nil, fmt.Errorf("股票代码 %s 无数据", symbol)
+		return result, fmt.Errorf("股票代码 %s 无数据", symbol)
 	}
 
 	// 优先取前复权数据 qfqday
@@ -228,24 +246,39 @@ func (a *App) fetchStockData(symbol string) ([]string, []float64, error) {
 	}
 
 	dates := make([]string, 0, len(klines))
+	opens := make([]float64, 0, len(klines))
+	highs := make([]float64, 0, len(klines))
+	lows := make([]float64, 0, len(klines))
 	closes := make([]float64, 0, len(klines))
+	
 	for _, k := range klines {
 		line, _ := k.([]interface{})
-		if len(line) < 3 { continue }
+		if len(line) < 5 { continue }
 
-		// line[0] 是日期, line[2] 是收盘价
+		// line[0]=日期, line[1]=开盘, line[2]=收盘, line[3]=最高, line[4]=最低
 		dateVal := strings.ReplaceAll(line[0].(string), "-", "")
-		priceVal, _ := strconv.ParseFloat(line[2].(string), 64)
+		openVal, _ := strconv.ParseFloat(line[1].(string), 64)
+		closeVal, _ := strconv.ParseFloat(line[2].(string), 64)
+		highVal, _ := strconv.ParseFloat(line[3].(string), 64)
+		lowVal, _ := strconv.ParseFloat(line[4].(string), 64)
 		
 		dates = append(dates, dateVal)
-		closes = append(closes, priceVal)
+		opens = append(opens, openVal)
+		highs = append(highs, highVal)
+		lows = append(lows, lowVal)
+		closes = append(closes, closeVal)
 	}
 
 	if len(dates) == 0 {
-		return nil, nil, fmt.Errorf("未找到有效 K 线数据")
+		return result, fmt.Errorf("未找到有效 K 线数据")
 	}
 
-	return dates, closes, nil
+	result.Dates = dates
+	result.Opens = opens
+	result.Highs = highs
+	result.Lows = lows
+	result.Closes = closes
+	return result, nil
 }
 
 // RunBacktest 支持多指标
@@ -255,28 +288,51 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 		return BacktestResult{}, fmt.Errorf("初始资金必须大于0")
 	}
 
-	allDates, allCloses, err := a.fetchStockData(symbol)
+	ohlca, err := a.fetchStockData(symbol)
 	if err != nil {
 		return BacktestResult{}, err
 	}
 
+	allDates := ohlca.Dates
+	allCloses := ohlca.Closes
+
 	fStart := strings.ReplaceAll(startDate, "-", "")
 	fEnd := strings.ReplaceAll(endDate, "-", "")
 
+	var result BacktestResult
+
 	// 根据指标类型执行不同的策略
 	if indicator == "macd" {
-		return a.runMACD(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+		result, err = a.runMACD(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
 	} else if indicator == "boll" {
-		return a.runBOLL(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2)
+		result, err = a.runBOLL(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2)
 	} else if indicator == "rsi" {
-		return a.runRSI(allDates, allCloses, fStart, fEnd, initialCapital, param1)
+		result, err = a.runRSI(allDates, allCloses, fStart, fEnd, initialCapital, param1)
 	} else if indicator == "sma" {
-		return a.runSMA(allDates, allCloses, fStart, fEnd, initialCapital, param1)
+		result, err = a.runSMA(allDates, allCloses, fStart, fEnd, initialCapital, param1)
 	} else if indicator == "kdj" {
-		return a.runKDJ(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+		result, err = a.runKDJ(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+	} else {
+		return BacktestResult{}, fmt.Errorf("不支持的指标: %s", indicator)
 	}
 
-	return BacktestResult{}, fmt.Errorf("不支持的指标: %s", indicator)
+	if err != nil {
+		return BacktestResult{}, err
+	}
+
+	// 保存OHLC数据用于前端显示K线
+	result.OHLCData = make([]OHLCOne, len(ohlca.Dates))
+	for i := range ohlca.Dates {
+		result.OHLCData[i] = OHLCOne{
+			Date:  ohlca.Dates[i],
+			Open:  ohlca.Opens[i],
+			High:  ohlca.Highs[i],
+			Low:   ohlca.Lows[i],
+			Close: ohlca.Closes[i],
+		}
+	}
+
+	return result, nil
 }
 
 // MACD策略

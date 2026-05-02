@@ -40,7 +40,9 @@ style.innerHTML = `
     .text-sell { color: var(--color-sell) !important; font-weight: bold; }
     
     main { flex: 1; display: flex; flex-direction: column; background: var(--bg-app); }
-    #chart-box { flex: 1; width: 100%; height: 100%; }
+    #chart-box { flex: 1; width: 100%; height: 100%; position: relative; }
+    #chart-controls { position: absolute; top: 10px; right: 10px; z-index: 100; display: flex; gap: 8px; background: var(--bg-side); padding: 8px; border-radius: 6px; border: 1px solid var(--border); }
+    #chart-controls select { width: auto; padding: 4px 8px; background: var(--bg-app); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
     .log-view { height: 250px; background: var(--bg-side); border-top: 1px solid var(--border); overflow-y: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 10px 15px; text-align: left; border-bottom: 1px solid var(--border); }
@@ -109,7 +111,19 @@ document.querySelector('#app').innerHTML = `
                 <div><small style="color:gray;">胜率</small><div id="resWinRate" style="font-size:18px; font-weight:bold;">-- %</div></div>
                 <div><small style="color:gray;">交易次数</small><div id="resTrades" style="font-size:18px; font-weight:bold;">--</div></div>
             </div>
-            <div id="chart-box"></div>
+            <div id="chart-box">
+                <div id="chart-controls">
+                    <select id="chartType">
+                        <option value="line">折线图（资产曲线）</option>
+                        <option value="candlestick">K线图</option>
+                    </select>
+                    <select id="klinePeriod" style="display:none;">
+                        <option value="day">日K</option>
+                        <option value="week">周K</option>
+                        <option value="month">月K</option>
+                    </select>
+                </div>
+            </div>
             <div class="log-view">
                 <table>
                     <thead><tr><th>📅 日期</th><th>📊 操作</th><th>💰 价格</th></tr></thead>
@@ -148,7 +162,61 @@ function renderLogs(logs) {
     }).join('');
 }
 
-// 渲染图表（使用Lightweight Charts）
+// 聚合OHLC数据（日K/周K/月K）
+function aggregateOHLC(ohlcData, period) {
+    if (!ohlcData || ohlcData.length === 0) return [];
+
+    if (period === 'day') {
+        return ohlcData.map(item => ({
+            time: item.date.substring(0, 4) + '-' + item.date.substring(4, 6) + '-' + item.date.substring(6, 8),
+            open: item.open,
+            high: item.high,
+            low: item.low,
+            close: item.close,
+        }));
+    } else if (period === 'week') {
+        const weekData = {};
+        ohlcData.forEach(item => {
+            const ds = item.date;
+            const d = new Date(ds.substring(0, 4) + '-' + ds.substring(4, 6) + '-' + ds.substring(6, 8));
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+            const monday = new Date(d.getFullYear(), d.getMonth(), diff);
+            const wk = monday.getFullYear() + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
+
+            if (!weekData[wk]) {
+                weekData[wk] = { open: item.open, high: item.high, low: item.low, close: item.close, date: ds };
+            } else {
+                weekData[wk].high = Math.max(weekData[wk].high, item.high);
+                weekData[wk].low = Math.min(weekData[wk].low, item.low);
+                weekData[wk].close = item.close;
+            }
+        });
+        return Object.values(weekData).map(it => ({
+            time: it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-' + it.date.substring(6, 8),
+            open: it.open, high: it.high, low: it.low, close: it.close,
+        }));
+    } else if (period === 'month') {
+        const monthData = {};
+        ohlcData.forEach(item => {
+            const mk = item.date.substring(0, 6);
+            if (!monthData[mk]) {
+                monthData[mk] = { open: item.open, high: item.high, low: item.low, close: item.close, date: item.date };
+            } else {
+                monthData[mk].high = Math.max(monthData[mk].high, item.high);
+                monthData[mk].low = Math.min(monthData[mk].low, item.low);
+                monthData[mk].close = item.close;
+            }
+        });
+        return Object.values(monthData).map(it => ({
+            time: it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-01',
+            open: it.open, high: it.high, low: it.low, close: it.close,
+        }));
+    }
+    return [];
+}
+
+// 渲染图表（支持折线图和K线图）
 function renderChart(res) {
     if (myChart) myChart.remove();
 
@@ -186,39 +254,59 @@ function renderChart(res) {
 
     myChart = createChart(container, chartOptions);
 
-    const areaSeriesOptions = {
-        lineColor: '#3b82f6',
-        topColor: 'rgba(59,130,246,0.3)',
-        bottomColor: 'transparent',
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: true,
-    };
+    const chartType = document.getElementById('chartType').value;
 
-    const areaSeries = myChart.addAreaSeries(areaSeriesOptions);
-
-    const chartData = res.dates.map((date, i) => ({
-        time: date.substring(0, 4) + '-' + date.substring(4, 6) + '-' + date.substring(6, 8),
-        value: res.chart_data[i],
-    }));
-    
-    areaSeries.setData(chartData);
-
-    // 使用 markers API
-    const markers = res.logs.map(log => {
-        const isBuy = log.action === '买入' || log.action.toUpperCase() === 'BUY';
-        const dateStr = log.date;
-        const formattedDate = dateStr.substring(0, 4) + '-' + dateStr.substring(4, 6) + '-' + dateStr.substring(6, 8);
-        return {
-            time: formattedDate,
-            position: isBuy ? 'belowBar' : 'aboveBar',
-            color: isBuy ? '#ef4444' : '#10b981',
-            shape: isBuy ? 'arrowUp' : 'arrowDown',
-            text: isBuy ? '买' : '卖',
+    if (chartType === 'line') {
+        // 折线图（资产曲线）
+        const areaSeriesOptions = {
+            lineColor: '#3b82f6',
+            topColor: 'rgba(59,130,246,0.3)',
+            bottomColor: 'transparent',
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: true,
         };
-    });
-    
-    areaSeries.setMarkers(markers);
+
+        const areaSeries = myChart.addAreaSeries(areaSeriesOptions);
+
+        const chartData = res.dates.map((date, i) => ({
+            time: date.substring(0, 4) + '-' + date.substring(4, 6) + '-' + date.substring(6, 8),
+            value: res.chart_data[i],
+        }));
+
+        areaSeries.setData(chartData);
+
+        const markers = res.logs.map(log => {
+            const isBuy = log.action === '买入' || log.action.toUpperCase() === 'BUY';
+            const dateStr = log.date;
+            const formattedDate = dateStr.substring(0, 4) + '-' + dateStr.substring(4, 6) + '-' + dateStr.substring(6, 8);
+            return {
+                time: formattedDate,
+                position: isBuy ? 'belowBar' : 'aboveBar',
+                color: isBuy ? '#ef4444' : '#10b981',
+                shape: isBuy ? 'arrowUp' : 'arrowDown',
+                text: isBuy ? '买' : '卖',
+            };
+        });
+
+        areaSeries.setMarkers(markers);
+    } else if (chartType === 'candlestick') {
+        // K线图
+        const candleSeriesOptions = {
+            upColor: '#ef4444',
+            downColor: '#10b981',
+            borderUpColor: '#ef4444',
+            borderDownColor: '#10b981',
+            wickUpColor: '#ef4444',
+            wickDownColor: '#10b981',
+        };
+
+        const candleSeries = myChart.addCandlestickSeries(candleSeriesOptions);
+
+        const period = document.getElementById('klinePeriod').value;
+        const ohlcData = aggregateOHLC(res.ohlc_data, period);
+        candleSeries.setData(ohlcData);
+    }
 
     myChart.timeScale().fitContent();
 }
@@ -279,6 +367,29 @@ function updateParamBox(indicator) {
 // 指标切换监听器
 document.getElementById('inIndicator').onchange = function() {
     updateParamBox(this.value);
+};
+
+// 图表类型切换
+document.getElementById('chartType').onchange = () => {
+    const chartType = document.getElementById('chartType').value;
+    const klinePeriod = document.getElementById('klinePeriod');
+    
+    if (chartType === 'candlestick') {
+        klinePeriod.style.display = 'block';
+    } else {
+        klinePeriod.style.display = 'none';
+    }
+    
+    if (lastRes) {
+        renderChart(lastRes);
+    }
+};
+
+// K线周期切换
+document.getElementById('klinePeriod').onchange = () => {
+    if (lastRes) {
+        renderChart(lastRes);
+    }
 };
 
 // 获取参数字符串
