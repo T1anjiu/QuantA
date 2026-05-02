@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +24,134 @@ type BacktestResult struct {
 	TotalReturn  float64    `json:"total_return"`
 	ChartData    []float64  `json:"chart_data"`
 	Dates        []string   `json:"dates"`
+	MaxDrawdown  float64    `json:"max_drawdown"`
+	SharpeRatio  float64    `json:"sharpe_ratio"`
+	SortinoRatio float64    `json:"sortino_ratio"`
+	CalmarRatio  float64    `json:"calmar_ratio"`
+	WinRate      float64    `json:"win_rate"`
+	TotalTrades  int        `json:"total_trades"`
+	ProfitTrades int        `json:"profit_trades"`
+}
+
+// 计算日收益率序列
+func calculateDailyReturns(chartData []float64) []float64 {
+	returns := make([]float64, len(chartData)-1)
+	for i := 1; i < len(chartData); i++ {
+		if chartData[i-1] != 0 {
+			returns[i-1] = (chartData[i] - chartData[i-1]) / chartData[i-1]
+		}
+	}
+	return returns
+}
+
+// 计算平均值
+func mean(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+// 计算标准差
+func stdDev(values []float64, avg float64) float64 {
+	if len(values) <= 1 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range values {
+		diff := v - avg
+		sum += diff * diff
+	}
+	return math.Sqrt(sum / float64(len(values)-1))
+}
+
+// 计算下行偏差（仅负收益）
+func downsideDeviation(returns []float64, target float64) float64 {
+	if len(returns) <= 1 {
+		return 0
+	}
+	sum := 0.0
+	count := 0
+	for _, r := range returns {
+		if r < target {
+			diff := r - target
+			sum += diff * diff
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return math.Sqrt(sum / float64(count-1))
+}
+
+// 计算性能指标
+func calculatePerformanceMetrics(result *BacktestResult, riskFreeRate float64) {
+	if len(result.ChartData) < 2 {
+		return
+	}
+
+	// 1. 最大回撤
+	peak := result.ChartData[0]
+	maxDrawdown := 0.0
+	for _, val := range result.ChartData {
+		if val > peak {
+			peak = val
+		}
+		drawdown := (peak - val) / peak * 100
+		if drawdown > maxDrawdown {
+			maxDrawdown = drawdown
+		}
+	}
+	result.MaxDrawdown = maxDrawdown
+
+	// 2. 计算日收益率
+	returns := calculateDailyReturns(result.ChartData)
+
+	// 3. 夏普比率 = (年化收益 - 无风险利率) / 年化波动率
+	avgReturn := mean(returns)
+	annualizedReturn := avgReturn * 252
+	std := stdDev(returns, avgReturn)
+	annualizedVol := std * math.Sqrt(252)
+
+	if annualizedVol != 0 {
+		result.SharpeRatio = (annualizedReturn - riskFreeRate) / annualizedVol
+	}
+
+	// 4. 索提诺比率 = (年化收益 - 无风险利率) / 年化下行偏差
+	downDev := downsideDeviation(returns, 0)
+	annualizedDownDev := downDev * math.Sqrt(252)
+	if annualizedDownDev != 0 {
+		result.SortinoRatio = (annualizedReturn - riskFreeRate) / annualizedDownDev
+	}
+
+	// 5. 卡玛比率 = 年化收益率 / 最大回撤
+	if maxDrawdown != 0 {
+		result.CalmarRatio = annualizedReturn / (maxDrawdown / 100)
+	}
+
+	// 6. 胜率计算
+	result.TotalTrades = len(result.Logs) / 2
+	if result.TotalTrades > 0 {
+		buyPrice := 0.0
+		profitCount := 0
+		for _, log := range result.Logs {
+			if log.Action == "买入" {
+				buyPrice = log.Price
+			} else if log.Action == "卖出" && buyPrice > 0 {
+				if log.Price > buyPrice {
+					profitCount++
+				}
+				buyPrice = 0
+			}
+		}
+		result.ProfitTrades = profitCount
+		result.WinRate = float64(profitCount) / float64(result.TotalTrades) * 100
+	}
 }
 
 type App struct {
@@ -207,13 +336,16 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 		finalVal = filteredChart[len(filteredChart)-1]
 	}
 
-	return BacktestResult{
+	result := BacktestResult{
 		Logs:         logs,
 		FinalCapital: finalVal,
 		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
 		ChartData:    filteredChart,
 		Dates:        filteredDates,
-	}, nil
+	}
+	calculatePerformanceMetrics(&result, 0.025)
+
+	return result, nil
 }
 
 // BOLL策略（价格突破下轨买入，突破上轨卖出）
@@ -283,13 +415,16 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 		finalVal = filteredChart[len(filteredChart)-1]
 	}
 
-	return BacktestResult{
+	result := BacktestResult{
 		Logs:         logs,
 		FinalCapital: finalVal,
 		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
 		ChartData:    filteredChart,
 		Dates:        filteredDates,
-	}, nil
+	}
+	calculatePerformanceMetrics(&result, 0.025)
+
+	return result, nil
 }
 
 // RSI策略（RSI < 30买入，RSI > 70卖出）
@@ -359,13 +494,16 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 		finalVal = filteredChart[len(filteredChart)-1]
 	}
 
-	return BacktestResult{
+	result := BacktestResult{
 		Logs:         logs,
 		FinalCapital: finalVal,
 		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
 		ChartData:    filteredChart,
 		Dates:        filteredDates,
-	}, nil
+	}
+	calculatePerformanceMetrics(&result, 0.025)
+
+	return result, nil
 }
 
 // SMA策略（简单移动平均线交叉）
@@ -435,13 +573,16 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 		finalVal = filteredChart[len(filteredChart)-1]
 	}
 
-	return BacktestResult{
+	result := BacktestResult{
 		Logs:         logs,
 		FinalCapital: finalVal,
 		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
 		ChartData:    filteredChart,
 		Dates:        filteredDates,
-	}, nil
+	}
+	calculatePerformanceMetrics(&result, 0.025)
+
+	return result, nil
 }
 
 // KDJ策略（K上穿D买入，K下穿D卖出）
@@ -514,11 +655,14 @@ func (a *App) runKDJ(allDates []string, allCloses []float64, fStart string, fEnd
 		finalVal = filteredChart[len(filteredChart)-1]
 	}
 
-	return BacktestResult{
+	result := BacktestResult{
 		Logs:         logs,
 		FinalCapital: finalVal,
 		TotalReturn:  (finalVal - initialCapital) / initialCapital * 100,
 		ChartData:    filteredChart,
 		Dates:        filteredDates,
-	}, nil
+	}
+	calculatePerformanceMetrics(&result, 0.025)
+
+	return result, nil
 }

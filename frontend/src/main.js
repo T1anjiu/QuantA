@@ -96,11 +96,18 @@ document.querySelector('#app').innerHTML = `
                 <input id="inEnd" type="date" class="input-field">
             </div>
             <button id="runBtn" class="btn-run">开始执行 / RUN</button>
+            <button id="exportBtn" class="btn-run" style="background:#10b981;margin-top:0;">导出图表 / EXPORT</button>
         </aside>
         <main>
-            <div style="padding:15px; display:flex; gap:30px; border-bottom:1px solid var(--border); background:var(--bg-side);">
+            <div style="padding:15px; display:flex; flex-wrap:wrap; gap:20px; border-bottom:1px solid var(--border); background:var(--bg-side);">
                 <div><small style="color:gray;">最终资产</small><div id="resCap" style="font-size:18px; font-weight:bold;">¥ --</div></div>
                 <div><small style="color:gray;">累计收益</small><div id="resRet" style="font-size:18px; font-weight:bold;">-- %</div></div>
+                <div><small style="color:gray;">最大回撤</small><div id="resDD" style="font-size:18px; font-weight:bold;">-- %</div></div>
+                <div><small style="color:gray;">夏普比率</small><div id="resSharpe" style="font-size:18px; font-weight:bold;">--</div></div>
+                <div><small style="color:gray;">索提诺比率</small><div id="resSortino" style="font-size:18px; font-weight:bold;">--</div></div>
+                <div><small style="color:gray;">卡玛比率</small><div id="resCalmar" style="font-size:18px; font-weight:bold;">--</div></div>
+                <div><small style="color:gray;">胜率</small><div id="resWinRate" style="font-size:18px; font-weight:bold;">-- %</div></div>
+                <div><small style="color:gray;">交易次数</small><div id="resTrades" style="font-size:18px; font-weight:bold;">--</div></div>
             </div>
             <div id="chart-box"></div>
             <div class="log-view">
@@ -115,6 +122,14 @@ document.querySelector('#app').innerHTML = `
 
 // 3. 核心逻辑
 let myChart = null, currentTheme = 'dark', lastRes = null;
+let currentParams = {
+    symbol: '',
+    indicator: '',
+    indicatorName: '',
+    params: '',
+    startDate: '',
+    endDate: ''
+};
 
 function getThemeVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -266,6 +281,22 @@ document.getElementById('inIndicator').onchange = function() {
     updateParamBox(this.value);
 };
 
+// 获取参数字符串
+function getParamString(indicator) {
+    const p1 = document.getElementById('inParam1').value;
+    const p2 = document.getElementById('inParam2') ? document.getElementById('inParam2').value : '';
+    const p3 = document.getElementById('inParam3') ? document.getElementById('inParam3').value : '';
+    
+    switch(indicator) {
+        case 'macd': return `快线:${p1} 慢线:${p2} 信号:${p3}`;
+        case 'boll': return `周期:${p1} 标准差:${p2}`;
+        case 'rsi': return `周期:${p1}`;
+        case 'sma': return `周期:${p1}`;
+        case 'kdj': return `周期:${p1} 平滑K:${p2} 平滑D:${p3}`;
+        default: return '';
+    }
+}
+
 // 点击运行（处理收益颜色和符号，以及最终资产数字颜色）
 document.getElementById('runBtn').onclick = async () => {
     const btn = document.getElementById('runBtn');
@@ -284,6 +315,23 @@ document.getElementById('runBtn').onclick = async () => {
         );
         lastRes = res;
 
+        // 保存当前参数用于导出
+        const indicatorNames = {
+            'macd': 'MACD',
+            'boll': 'BOLL',
+            'rsi': 'RSI',
+            'sma': 'SMA',
+            'kdj': 'KDJ'
+        };
+        currentParams = {
+            symbol: document.getElementById('inCode').value,
+            indicator: indicator,
+            indicatorName: indicatorNames[indicator] || indicator,
+            params: getParamString(indicator),
+            startDate: document.getElementById('inStart').value || '起始',
+            endDate: document.getElementById('inEnd').value || '至今'
+        };
+
         // 最终资产数字颜色：亮色模式黑色，暗色模式白色
         const capElement = document.getElementById('resCap');
         capElement.innerText = `¥ ${res.final_capital.toLocaleString()}`;
@@ -294,6 +342,22 @@ document.getElementById('runBtn').onclick = async () => {
         const retElement = document.getElementById('resRet');
         retElement.innerText = `${ret > 0 ? '+' : ''}${ret.toFixed(2)}%`;
         retElement.style.color = ret >= 0 ? '#ef4444' : '#10b981';  // 盈利红色，亏损绿色
+
+        // 更新新指标
+        document.getElementById('resDD').innerText = `${res.max_drawdown.toFixed(2)}%`;
+        document.getElementById('resDD').style.color = '#ef4444';
+
+        document.getElementById('resSharpe').innerText = res.sharpe_ratio.toFixed(2);
+        document.getElementById('resSharpe').style.color = res.sharpe_ratio > 1 ? '#10b981' : '#ef4444';
+
+        document.getElementById('resSortino').innerText = res.sortino_ratio.toFixed(2);
+
+        document.getElementById('resCalmar').innerText = res.calmar_ratio.toFixed(2);
+
+        document.getElementById('resWinRate').innerText = `${res.win_rate.toFixed(1)}%`;
+        document.getElementById('resWinRate').style.color = res.win_rate > 50 ? '#10b981' : '#ef4444';
+
+        document.getElementById('resTrades').innerText = res.total_trades;
 
         renderChart(res);
         renderLogs(res.logs);
@@ -328,4 +392,77 @@ window.onresize = () => {
             });
         }
     }
+};
+
+// 导出图表为图片
+document.getElementById('exportBtn').onclick = async () => {
+    if (!myChart || !lastRes) {
+        alert('请先运行回测！');
+        return;
+    }
+
+    const btn = document.getElementById('exportBtn');
+    btn.innerText = "正在导出...";
+    
+    try {
+        // 获取图表截图（返回的是 Canvas 元素）
+        const chartCanvas = await myChart.takeScreenshot();
+        
+        // 创建新的 Canvas 用于添加信息
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 设置 Canvas 尺寸与图表相同
+        canvas.width = chartCanvas.width;
+        canvas.height = chartCanvas.height;
+        
+        // 绘制图表
+        ctx.drawImage(chartCanvas, 0, 0);
+        
+        // 左上角信息
+        const info = [
+            `股票代码: ${currentParams.symbol}`,
+            `指标: ${currentParams.indicatorName} (${currentParams.params})`,
+            `回测时间: ${currentParams.startDate} ~ ${currentParams.endDate}`,
+            `最终资产: ¥${lastRes.final_capital.toLocaleString()}`,
+            `累计收益: ${lastRes.total_return > 0 ? '+' : ''}${lastRes.total_return.toFixed(2)}%`,
+            `最大回撤: ${lastRes.max_drawdown.toFixed(2)}%`,
+            `夏普比率: ${lastRes.sharpe_ratio.toFixed(2)}`,
+            `胜率: ${lastRes.win_rate.toFixed(1)}%`
+        ];
+        
+        // 绘制半透明背景
+        const padding = 10;
+        const lineHeight = 20;
+        ctx.font = '12px sans-serif';
+        const textWidth = Math.max(...info.map(line => ctx.measureText(line).width));
+        const bgWidth = textWidth + padding * 2;
+        const bgHeight = info.length * lineHeight + padding * 2;
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(10, 10, bgWidth, bgHeight);
+        
+        // 绘制文字
+        ctx.fillStyle = '#ffffff';
+        info.forEach((line, idx) => {
+            ctx.fillText(line, 10 + padding, 10 + padding + (idx + 1) * lineHeight - 5);
+        });
+        
+        // 导出图片
+        canvas.toBlob((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `QuantA_${currentParams.symbol}_${currentParams.indicator}_${Date.now()}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 'image/png');
+        
+    } catch (e) {
+        alert('导出失败: ' + e.message);
+    }
+    
+    btn.innerText = "导出图表 / EXPORT";
 };
