@@ -6,6 +6,9 @@ export namespace main {
 	    high: number;
 	    low: number;
 	    close: number;
+	    volume: number;
+	    amount: number;
+	    change: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new OHLCOne(source);
@@ -18,6 +21,9 @@ export namespace main {
 	        this.high = source["high"];
 	        this.low = source["low"];
 	        this.close = source["close"];
+	        this.volume = source["volume"];
+	        this.amount = source["amount"];
+	        this.change = source["change"];
 	    }
 	}
 	export class TradeLog {

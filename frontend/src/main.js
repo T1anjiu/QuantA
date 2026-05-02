@@ -43,6 +43,13 @@ style.innerHTML = `
     #chart-box { flex: 1; width: 100%; height: 100%; position: relative; }
     #chart-controls { position: absolute; top: 10px; right: 10px; z-index: 100; display: flex; gap: 8px; background: var(--bg-side); padding: 8px; border-radius: 6px; border: 1px solid var(--border); }
     #chart-controls select { width: auto; padding: 4px 8px; background: var(--bg-app); color: var(--text-main); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+    #chart-info { position: absolute; bottom: 10px; left: 10px; z-index: 100; background: rgba(0,0,0,0.85); color: #fff; padding: 12px; border-radius: 6px; font-size: 12px; min-width: 220px; display: none; pointer-events: none; }
+    #chart-info.active { display: block; }
+    #chart-info div { margin: 4px 0; }
+    #chart-info .label { color: #aaa; margin-right: 8px; }
+    #chart-info .val { color: #fff; }
+    .info-up { color: #ef4444 !important; }
+    .info-down { color: #10b981 !important; }
     .log-view { height: 250px; background: var(--bg-side); border-top: 1px solid var(--border); overflow-y: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 10px 15px; text-align: left; border-bottom: 1px solid var(--border); }
@@ -123,6 +130,16 @@ document.querySelector('#app').innerHTML = `
                         <option value="month">月K</option>
                     </select>
                 </div>
+                <div id="chart-info">
+                    <div><span class="label">日期：</span><span class="val" id="info-date"></span></div>
+                    <div><span class="label">开盘：</span><span class="val" id="info-open"></span></div>
+                    <div><span class="label">最高：</span><span class="val" id="info-high"></span></div>
+                    <div><span class="label">最低：</span><span class="val" id="info-low"></span></div>
+                    <div><span class="label">收盘：</span><span class="val" id="info-close"></span></div>
+                    <div><span class="label">成交量：</span><span class="val" id="info-volume"></span></div>
+                    <div><span class="label">成交额：</span><span class="val" id="info-amount"></span></div>
+                    <div><span class="label">涨跌幅：</span><span class="val" id="info-change"></span></div>
+                </div>
             </div>
             <div class="log-view">
                 <table>
@@ -162,18 +179,31 @@ function renderLogs(logs) {
     }).join('');
 }
 
+// 全局变量：存储详细数据映射
+let ohlcDetailMap = {};
+
 // 聚合OHLC数据（日K/周K/月K）
 function aggregateOHLC(ohlcData, period) {
     if (!ohlcData || ohlcData.length === 0) return [];
 
+    ohlcDetailMap = {};
+
     if (period === 'day') {
-        return ohlcData.map(item => ({
-            time: item.date.substring(0, 4) + '-' + item.date.substring(4, 6) + '-' + item.date.substring(6, 8),
-            open: item.open,
-            high: item.high,
-            low: item.low,
-            close: item.close,
-        }));
+        return ohlcData.map(item => {
+            const time = item.date.substring(0, 4) + '-' + item.date.substring(4, 6) + '-' + item.date.substring(6, 8);
+            ohlcDetailMap[time] = {
+                volume: item.volume || 0,
+                amount: item.amount || 0,
+                change: item.change || 0,
+            };
+            return {
+                time: time,
+                open: item.open,
+                high: item.high,
+                low: item.low,
+                close: item.close,
+            };
+        });
     } else if (period === 'week') {
         const weekData = {};
         ohlcData.forEach(item => {
@@ -185,33 +215,77 @@ function aggregateOHLC(ohlcData, period) {
             const wk = monday.getFullYear() + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
 
             if (!weekData[wk]) {
-                weekData[wk] = { open: item.open, high: item.high, low: item.low, close: item.close, date: ds };
+                weekData[wk] = {
+                    open: item.open,
+                    high: item.high,
+                    low: item.low,
+                    close: item.close,
+                    volume: item.volume || 0,
+                    amount: item.amount || 0,
+                    change: item.change || 0,
+                    date: ds
+                };
             } else {
                 weekData[wk].high = Math.max(weekData[wk].high, item.high);
                 weekData[wk].low = Math.min(weekData[wk].low, item.low);
                 weekData[wk].close = item.close;
+                weekData[wk].volume += (item.volume || 0);
+                weekData[wk].amount += (item.amount || 0);
             }
         });
-        return Object.values(weekData).map(it => ({
-            time: it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-' + it.date.substring(6, 8),
-            open: it.open, high: it.high, low: it.low, close: it.close,
-        }));
+        return Object.values(weekData).map(it => {
+            const time = it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-' + it.date.substring(6, 8);
+            ohlcDetailMap[time] = {
+                volume: it.volume,
+                amount: it.amount,
+                change: it.change,
+            };
+            return {
+                time: time,
+                open: it.open,
+                high: it.high,
+                low: it.low,
+                close: it.close,
+            };
+        });
     } else if (period === 'month') {
         const monthData = {};
         ohlcData.forEach(item => {
             const mk = item.date.substring(0, 6);
             if (!monthData[mk]) {
-                monthData[mk] = { open: item.open, high: item.high, low: item.low, close: item.close, date: item.date };
+                monthData[mk] = {
+                    open: item.open,
+                    high: item.high,
+                    low: item.low,
+                    close: item.close,
+                    volume: item.volume || 0,
+                    amount: item.amount || 0,
+                    change: item.change || 0,
+                    date: item.date
+                };
             } else {
                 monthData[mk].high = Math.max(monthData[mk].high, item.high);
                 monthData[mk].low = Math.min(monthData[mk].low, item.low);
                 monthData[mk].close = item.close;
+                monthData[mk].volume += (item.volume || 0);
+                monthData[mk].amount += (item.amount || 0);
             }
         });
-        return Object.values(monthData).map(it => ({
-            time: it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-01',
-            open: it.open, high: it.high, low: it.low, close: it.close,
-        }));
+        return Object.values(monthData).map(it => {
+            const time = it.date.substring(0, 4) + '-' + it.date.substring(4, 6) + '-01';
+            ohlcDetailMap[time] = {
+                volume: it.volume,
+                amount: it.amount,
+                change: it.change,
+            };
+            return {
+                time: time,
+                open: it.open,
+                high: it.high,
+                low: it.low,
+                close: it.close,
+            };
+        });
     }
     return [];
 }
@@ -255,9 +329,11 @@ function renderChart(res) {
     myChart = createChart(container, chartOptions);
 
     const chartType = document.getElementById('chartType').value;
+    const infoPanel = document.getElementById('chart-info');
 
     if (chartType === 'line') {
         // 折线图（资产曲线）
+        infoPanel.classList.remove('active');
         const areaSeriesOptions = {
             lineColor: '#3b82f6',
             topColor: 'rgba(59,130,246,0.3)',
@@ -321,6 +397,66 @@ function renderChart(res) {
             };
         });
         candleSeries.setMarkers(markers);
+
+        // 添加成交量柱状图
+        const volumeSeries = myChart.addHistogramSeries({
+            priceFormat: { type: 'volume' },
+            color: '#26a69a',
+            priceScaleId: 'volume',
+        });
+        myChart.priceScale('volume').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 },
+        });
+
+        // 创建成交量数据
+        const volumeData = ohlcData.map(item => {
+            const ohlcItem = res.ohlc_data.find(d => {
+                const t = d.date.substring(0, 4) + '-' + d.date.substring(4, 6) + '-' + d.date.substring(6, 8);
+                return t === item.time;
+            });
+            return {
+                time: item.time,
+                value: ohlcItem ? (ohlcItem.volume || 0) : 0,
+                color: item.close >= item.open ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)',
+            };
+        });
+        volumeSeries.setData(volumeData);
+
+        // 显示信息面板
+        document.getElementById('chart-info').classList.add('active');
+
+        // 订阅十字线移动事件，更新信息面板
+        myChart.subscribeCrosshairMove(param => {
+            if (!param.time) {
+                return;
+            }
+            const time = param.time;
+            let dateStr;
+            if (typeof time === 'string') {
+                dateStr = time;
+            } else {
+                dateStr = new Date(time * 1000).toISOString().split('T')[0];
+            }
+            const detail = ohlcDetailMap[dateStr];
+            if (!detail) return;
+
+            // 获取OHLC数据
+            const ohlcDataItem = ohlcData.find(item => item.time === dateStr);
+            if (!ohlcDataItem) return;
+
+            const change = detail.change || 0;
+            const changeClass = change >= 0 ? 'info-up' : 'info-down';
+            const changeSign = change >= 0 ? '+' : '';
+
+            document.getElementById('info-date').textContent = dateStr;
+            document.getElementById('info-open').textContent = ohlcDataItem.open.toFixed(2);
+            document.getElementById('info-high').textContent = ohlcDataItem.high.toFixed(2);
+            document.getElementById('info-low').textContent = ohlcDataItem.low.toFixed(2);
+            document.getElementById('info-close').textContent = ohlcDataItem.close.toFixed(2);
+            document.getElementById('info-volume').textContent = detail.volume.toLocaleString();
+            document.getElementById('info-amount').textContent = detail.amount.toLocaleString();
+            document.getElementById('info-change').innerHTML = `<span class="${changeClass}">${changeSign}${change.toFixed(2)}%</span>`;
+        });
     }
 
     myChart.timeScale().fitContent();

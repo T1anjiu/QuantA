@@ -24,14 +24,36 @@ type StockOHLC struct {
 	Highs  []float64
 	Lows   []float64
 	Closes []float64
+	Volumes []float64
+	Amounts []float64
 }
 
 type OHLCOne struct {
-	Date  string  `json:"date"`
-	Open  float64 `json:"open"`
-	High  float64 `json:"high"`
-	Low   float64 `json:"low"`
-	Close float64 `json:"close"`
+	Date    string  `json:"date"`
+	Open    float64 `json:"open"`
+	High    float64 `json:"high"`
+	Low     float64 `json:"low"`
+	Close   float64 `json:"close"`
+	Volume  float64 `json:"volume"`
+	Amount  float64 `json:"amount"`
+	Change  float64 `json:"change"`
+}
+
+// 安全地将 interface{} 转换为 float64
+func toFloat64(v interface{}) float64 {
+	switch val := v.(type) {
+	case string:
+		f, _ := strconv.ParseFloat(val, 64)
+		return f
+	case float64:
+		return val
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	default:
+		return 0
+	}
 }
 
 type BacktestResult struct {
@@ -250,7 +272,9 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 	highs := make([]float64, 0, len(klines))
 	lows := make([]float64, 0, len(klines))
 	closes := make([]float64, 0, len(klines))
-	
+	volumes := make([]float64, 0, len(klines))
+	amounts := make([]float64, 0, len(klines))
+
 	for _, k := range klines {
 		line, _ := k.([]interface{})
 		if len(line) < 5 { continue }
@@ -261,12 +285,23 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 		closeVal, _ := strconv.ParseFloat(line[2].(string), 64)
 		highVal, _ := strconv.ParseFloat(line[3].(string), 64)
 		lowVal, _ := strconv.ParseFloat(line[4].(string), 64)
-		
+
+			// line[5]=成交量, line[6]=成交额，安全转换
+		var volumeVal, amountVal float64
+		if len(line) > 5 {
+			volumeVal = toFloat64(line[5])
+		}
+		if len(line) > 6 {
+			amountVal = toFloat64(line[6])
+		}
+
 		dates = append(dates, dateVal)
 		opens = append(opens, openVal)
 		highs = append(highs, highVal)
 		lows = append(lows, lowVal)
 		closes = append(closes, closeVal)
+		volumes = append(volumes, volumeVal)
+		amounts = append(amounts, amountVal)
 	}
 
 	if len(dates) == 0 {
@@ -278,6 +313,8 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 	result.Highs = highs
 	result.Lows = lows
 	result.Closes = closes
+	result.Volumes = volumes
+	result.Amounts = amounts
 	return result, nil
 }
 
@@ -323,12 +360,20 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 	// 保存OHLC数据用于前端显示K线
 	result.OHLCData = make([]OHLCOne, len(ohlca.Dates))
 	for i := range ohlca.Dates {
+		// 计算涨跌幅
+		var change float64
+		if i > 0 && ohlca.Closes[i-1] != 0 {
+			change = (ohlca.Closes[i] - ohlca.Closes[i-1]) / ohlca.Closes[i-1] * 100
+		}
 		result.OHLCData[i] = OHLCOne{
-			Date:  ohlca.Dates[i],
-			Open:  ohlca.Opens[i],
-			High:  ohlca.Highs[i],
-			Low:   ohlca.Lows[i],
-			Close: ohlca.Closes[i],
+			Date:   ohlca.Dates[i],
+			Open:   ohlca.Opens[i],
+			High:   ohlca.Highs[i],
+			Low:    ohlca.Lows[i],
+			Close:  ohlca.Closes[i],
+			Volume: ohlca.Volumes[i],
+			Amount: ohlca.Amounts[i],
+			Change: change,
 		}
 	}
 
