@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"github.com/markcheno/go-talib"
 )
 
@@ -122,7 +123,7 @@ func downsideDeviation(returns []float64, target float64) float64 {
 			count++
 		}
 	}
-	if count == 0 {
+	if count <= 1 {
 		return 0
 	}
 	return math.Sqrt(sum / float64(count-1))
@@ -193,6 +194,20 @@ func calculatePerformanceMetrics(result *BacktestResult, riskFreeRate float64) {
 	}
 }
 
+// 强制平仓辅助函数
+func forceClosePosition(position *float64, capital *float64, allDates []string, allCloses []float64, logs *[]TradeLog, filteredChart []float64) {
+	if *position > 0 && len(allCloses) > 0 {
+		lastIdx := len(allCloses) - 1
+		*capital = *position * allCloses[lastIdx]
+		*position = 0
+		*logs = append(*logs, TradeLog{Date: allDates[lastIdx], Action: "卖出", Price: allCloses[lastIdx]})
+		// 更新最后一个点的资产值
+		if len(filteredChart) > 0 {
+			filteredChart[len(filteredChart)-1] = *capital
+		}
+	}
+}
+
 type App struct {
 	ctx context.Context
 }
@@ -230,8 +245,9 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 
 	// 腾讯代理接口：支持 500 条 K 线及前复权
 	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?_var=kline_day&param=%s,day,,,1100,qfq", code)
-	
-	resp, err := http.Get(url)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return result, err
 	}
@@ -253,7 +269,11 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 		return result, fmt.Errorf("解析失败: %v", err)
 	}
 
-	data, _ := raw["data"].(map[string]interface{})
+	data, ok := raw["data"].(map[string]interface{})
+	if !ok {
+		return result, fmt.Errorf("股票代码 %s 数据格式错误", symbol)
+	}
+
 	stockData, ok := data[code].(map[string]interface{})
 	if !ok {
 		return result, fmt.Errorf("股票代码 %s 无数据", symbol)
@@ -263,8 +283,10 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 	var klines []interface{}
 	if qfq, ok := stockData["qfqday"].([]interface{}); ok {
 		klines = qfq
+	} else if day, ok := stockData["day"].([]interface{}); ok {
+		klines = day
 	} else {
-		klines, _ = stockData["day"].([]interface{})
+		return result, fmt.Errorf("股票代码 %s 无K线数据", symbol)
 	}
 
 	dates := make([]string, 0, len(klines))
@@ -431,6 +453,9 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 		filteredChart = append(filteredChart, val)
 	}
 
+	// 如果回测结束时还有持仓，强制平仓
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
@@ -509,6 +534,9 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 		filteredDates = append(filteredDates, allDates[i])
 		filteredChart = append(filteredChart, val)
 	}
+
+	// 如果回测结束时还有持仓，强制平仓
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -589,6 +617,9 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 		filteredChart = append(filteredChart, val)
 	}
 
+	// 如果回测结束时还有持仓，强制平仓
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
@@ -667,6 +698,9 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 		filteredDates = append(filteredDates, allDates[i])
 		filteredChart = append(filteredChart, val)
 	}
+
+	// 如果回测结束时还有持仓，强制平仓
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -749,6 +783,9 @@ func (a *App) runKDJ(allDates []string, allCloses []float64, fStart string, fEnd
 		filteredDates = append(filteredDates, allDates[i])
 		filteredChart = append(filteredChart, val)
 	}
+
+	// 如果回测结束时还有持仓，强制平仓
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
