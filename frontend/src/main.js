@@ -71,10 +71,10 @@ document.head.appendChild(style);
 document.querySelector('#app').innerHTML = `
     <div id="app-frame" class="app-container dark-theme">
         <aside class="sidebar">
-            <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;">
-                <b style="color:var(--accent)">QUANT-A</b>
-                <button id="themeToggle" style="font-size:14px; background:transparent; border:none; cursor:pointer; color:var(--text-main);">☀️ 切换 🌙</button>
-            </div>
+             <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+                 <b style="color:var(--accent)">QUANT-A</b>
+                 <button id="themeToggle" style="font-size:14px; background:transparent; border:none; cursor:pointer; color:var(--text-main);">☀️ 切换 🌙</button>
+             </div>
             <div class="input-group">
                 <label style="font-size:12px; color:gray;">技术指标</label>
                 <select id="inIndicator" class="input-field">
@@ -147,9 +147,18 @@ document.querySelector('#app').innerHTML = `
                     <thead><tr><th>📅 日期</th><th>📊 操作</th><th>💰 价格</th></tr></thead>
                     <tbody id="logBody"></tbody>
                 </table>
-            </div>
-        </main>
+         </div>
     </div>
+    <div id="settingsPage" style="display:none; height:100vh; background:var(--bg-app); color:var(--text-main);">
+        <div style="padding:15px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+            <b style="color:var(--accent)">⚙️ 设置</b>
+            <button id="backBtn" style="font-size:14px; background:transparent; border:1px solid var(--border); cursor:pointer; color:var(--text-main); padding:6px 12px; border-radius:6px;">← 返回</button>
+        </div>
+        <div style="padding:30px; text-align:center; color:gray; font-size:14px;">
+            设置页面（后续可添加数据源、字体大小等功能）
+        </div>
+    </div>
+    <button id="settingsBtn" title="设置" style="position:fixed; top:15px; right:20px; z-index:9999; font-size:18px; background:transparent; border:none; cursor:pointer; color:var(--text-main);">⚙️</button>
 `;
 
 // 3. 核心逻辑
@@ -648,6 +657,19 @@ document.getElementById('themeToggle').onclick = () => {
         capElement.style.color = currentTheme === 'light' ? '#000000' : '';
         renderChart(lastRes);
     }
+};
+
+// 设置页面切换逻辑
+document.getElementById('settingsBtn').onclick = () => {
+    document.getElementById('app-frame').style.display = 'none';
+    document.getElementById('settingsBtn').style.display = 'none';
+    document.getElementById('settingsPage').style.display = 'block';
+};
+
+document.getElementById('backBtn').onclick = () => {
+    document.getElementById('settingsPage').style.display = 'none';
+    document.getElementById('settingsBtn').style.display = 'block';
+    document.getElementById('app-frame').style.display = 'flex';
 };
 
 window.onresize = () => {
