@@ -40,20 +40,34 @@ type OHLCOne struct {
 	Change  float64 `json:"change"`
 }
 
-// 安全地将 interface{} 转换为 float64
-func toFloat64(v interface{}) float64 {
+// 安全地将 interface{} 转换为 float64，返回错误
+func toFloat64(v interface{}) (float64, error) {
+	if v == nil {
+		return 0, nil
+	}
 	switch val := v.(type) {
 	case string:
-		f, _ := strconv.ParseFloat(val, 64)
-		return f
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return 0, fmt.Errorf("字符串转float64失败: %v (值: %v)", err, val)
+		}
+		return f, nil
 	case float64:
-		return val
+		return val, nil
+	case float32:
+		return float64(val), nil
 	case int:
-		return float64(val)
+		return float64(val), nil
 	case int64:
-		return float64(val)
+		return float64(val), nil
+	case int32:
+		return float64(val), nil
+	case int16:
+		return float64(val), nil
+	case int8:
+		return float64(val), nil
 	default:
-		return 0
+		return 0, fmt.Errorf("不支持的类型转换为float64: %T (值: %v)", v, v)
 	}
 }
 
@@ -298,23 +312,66 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 	amounts := make([]float64, 0, len(klines))
 
 	for _, k := range klines {
-		line, _ := k.([]interface{})
+		line, ok := k.([]interface{})
+		if !ok {
+			continue
+		}
 		if len(line) < 5 { continue }
 
-		// line[0]=日期, line[1]=开盘, line[2]=收盘, line[3]=最高, line[4]=最低
-		dateVal := strings.ReplaceAll(line[0].(string), "-", "")
-		openVal, _ := strconv.ParseFloat(line[1].(string), 64)
-		closeVal, _ := strconv.ParseFloat(line[2].(string), 64)
-		highVal, _ := strconv.ParseFloat(line[3].(string), 64)
-		lowVal, _ := strconv.ParseFloat(line[4].(string), 64)
+		// line[0]=日期
+		dateStr, ok := line[0].(string)
+		if !ok {
+			continue
+		}
+		dateVal := strings.ReplaceAll(dateStr, "-", "")
 
-			// line[5]=成交量, line[6]=成交额，安全转换
+		// line[1]=开盘
+		openStr, ok := line[1].(string)
+		if !ok {
+			continue
+		}
+		openVal, err := strconv.ParseFloat(openStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// line[2]=收盘
+		closeStr, ok := line[2].(string)
+		if !ok {
+			continue
+		}
+		closeVal, err := strconv.ParseFloat(closeStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// line[3]=最高
+		highStr, ok := line[3].(string)
+		if !ok {
+			continue
+		}
+		highVal, err := strconv.ParseFloat(highStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// line[4]=最低
+		lowStr, ok := line[4].(string)
+		if !ok {
+			continue
+		}
+		lowVal, err := strconv.ParseFloat(lowStr, 64)
+		if err != nil {
+			continue
+		}
+
+		// line[5]=成交量, line[6]=成交额，安全转换（非关键字段，失败用0）
 		var volumeVal, amountVal float64
 		if len(line) > 5 {
-			volumeVal = toFloat64(line[5])
+			volumeVal, _ = toFloat64(line[5])
 		}
 		if len(line) > 6 {
-			amountVal = toFloat64(line[6])
+			amountVal, _ = toFloat64(line[6])
 		}
 
 		dates = append(dates, dateVal)
@@ -354,6 +411,8 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 
 	allDates := ohlca.Dates
 	allCloses := ohlca.Closes
+	allHighs := ohlca.Highs
+	allLows := ohlca.Lows
 
 	fStart := strings.ReplaceAll(startDate, "-", "")
 	fEnd := strings.ReplaceAll(endDate, "-", "")
@@ -370,7 +429,7 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 	} else if indicator == "sma" {
 		result, err = a.runSMA(allDates, allCloses, fStart, fEnd, initialCapital, param1)
 	} else if indicator == "kdj" {
-		result, err = a.runKDJ(allDates, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
+		result, err = a.runKDJ(allDates, allHighs, allLows, allCloses, fStart, fEnd, initialCapital, param1, param2, param3)
 	} else {
 		return BacktestResult{}, fmt.Errorf("不支持的指标: %s", indicator)
 	}
@@ -721,7 +780,7 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 }
 
 // KDJ策略（K上穿D买入，K下穿D卖出）
-func (a *App) runKDJ(allDates []string, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int, kSmoothing int, dSmoothing int) (BacktestResult, error) {
+func (a *App) runKDJ(allDates []string, allHighs []float64, allLows []float64, allCloses []float64, fStart string, fEnd string, initialCapital float64, period int, kSmoothing int, dSmoothing int) (BacktestResult, error) {
 	if period <= 0 {
 		return BacktestResult{}, fmt.Errorf("KDJ周期必须大于0")
 	}
@@ -729,7 +788,7 @@ func (a *App) runKDJ(allDates []string, allCloses []float64, fStart string, fEnd
 		return BacktestResult{}, fmt.Errorf("KDJ平滑参数必须大于0")
 	}
 
-	slowK, slowD := talib.Stoch(allCloses, allCloses, allCloses, period, kSmoothing, talib.SMA, dSmoothing, talib.SMA)
+	slowK, slowD := talib.Stoch(allHighs, allLows, allCloses, period, kSmoothing, talib.SMA, dSmoothing, talib.SMA)
 
 	var logs []TradeLog
 	var filteredDates []string

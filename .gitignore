@@ -1,3 +1,10 @@
 build/bin
 node_modules
 frontend/dist
+*.exe
+*.exe~
+.wails-*
+logs/
+frontend_vanilla_backup/
+.DS_Store
+Thumbs.db

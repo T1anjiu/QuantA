@@ -103,8 +103,9 @@ document.querySelector('#app').innerHTML = `
                 <input id="inStart" type="date" class="input-field">
                 <div style="font-size:11px; color:gray; margin-bottom:-5px;">截止日期</div>
                 <input id="inEnd" type="date" class="input-field">
-            </div>
-            <button id="runBtn" class="btn-run">开始执行 / RUN</button>
+             </div>
+             <div id="errorMsg" style="color:#ef4444; font-size:12px; padding:10px 20px; display:none;"></div>
+             <button id="runBtn" class="btn-run">开始执行 / RUN</button>
             <button id="exportBtn" class="btn-run" style="background:#10b981;margin-top:0;">导出图表 / EXPORT</button>
         </aside>
         <main>
@@ -623,7 +624,12 @@ document.getElementById('runBtn').onclick = async () => {
 
         renderChart(res);
         renderLogs(res.logs);
-    } catch (e) { alert(e); }
+     } catch (e) {
+         const errorDiv = document.getElementById('errorMsg');
+         errorDiv.innerText = `错误: ${e.message || e}`;
+         errorDiv.style.display = 'block';
+         setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
+     }
     btn.innerText = "开始执行 / RUN";
 };
 
@@ -722,9 +728,12 @@ document.getElementById('exportBtn').onclick = async () => {
             URL.revokeObjectURL(url);
         }, 'image/png');
         
-    } catch (e) {
-        alert('导出失败: ' + e.message);
-    }
+     } catch (e) {
+         const errorDiv = document.getElementById('errorMsg');
+         errorDiv.innerText = `导出失败: ${e.message || e}`;
+         errorDiv.style.display = 'block';
+         setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
+     }
     
     btn.innerText = "导出图表 / EXPORT";
 };
