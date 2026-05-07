@@ -209,9 +209,9 @@ func calculatePerformanceMetrics(result *BacktestResult, riskFreeRate float64) {
 }
 
 // 强制平仓辅助函数
-func forceClosePosition(position *float64, capital *float64, allDates []string, allCloses []float64, logs *[]TradeLog, filteredChart []float64) {
-	if *position > 0 && len(allCloses) > 0 {
-		lastIdx := len(allCloses) - 1
+func forceClosePosition(position *float64, capital *float64, allDates []string, allCloses []float64, logs *[]TradeLog, filteredChart []float64, closeIdx int) {
+	if *position > 0 && closeIdx >= 0 && closeIdx < len(allCloses) {
+		lastIdx := closeIdx
 		*capital = *position * allCloses[lastIdx]
 		*position = 0
 		*logs = append(*logs, TradeLog{Date: allDates[lastIdx], Action: "卖出", Price: allCloses[lastIdx]})
@@ -438,15 +438,22 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 		return BacktestResult{}, err
 	}
 
-	// 保存OHLC数据用于前端显示K线
-	result.OHLCData = make([]OHLCOne, len(ohlca.Dates))
+	// 保存回测区间内的OHLC数据用于前端显示K线
+	result.OHLCData = make([]OHLCOne, 0, len(ohlca.Dates))
 	for i := range ohlca.Dates {
+		if ohlca.Dates[i] < fStart {
+			continue
+		}
+		if fEnd != "" && ohlca.Dates[i] > fEnd {
+			continue
+		}
+
 		// 计算涨跌幅
 		var change float64
 		if i > 0 && ohlca.Closes[i-1] != 0 {
 			change = (ohlca.Closes[i] - ohlca.Closes[i-1]) / ohlca.Closes[i-1] * 100
 		}
-		result.OHLCData[i] = OHLCOne{
+		result.OHLCData = append(result.OHLCData, OHLCOne{
 			Date:   ohlca.Dates[i],
 			Open:   ohlca.Opens[i],
 			High:   ohlca.Highs[i],
@@ -455,7 +462,7 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 			Volume: ohlca.Volumes[i],
 			Amount: ohlca.Amounts[i],
 			Change: change,
-		}
+		})
 	}
 
 	return result, nil
@@ -478,6 +485,7 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 
 	capital := initialCapital
 	position := 0.0
+	lastIndex := -1
 
 	startIndex := 0
 	for i, d := range allDates {
@@ -491,6 +499,7 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 		if fEnd != "" && allDates[i] > fEnd {
 			break
 		}
+		lastIndex = i
 
 		if i > 0 && dif[i-1] != 0 {
 			if position == 0 && dif[i] > dea[i] && dif[i-1] <= dea[i-1] {
@@ -513,7 +522,7 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 	}
 
 	// 如果回测结束时还有持仓，强制平仓
-	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -547,6 +556,7 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 
 	capital := initialCapital
 	position := 0.0
+	lastIndex := -1
 
 	startIndex := 0
 	for i, d := range allDates {
@@ -560,6 +570,7 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 		if fEnd != "" && allDates[i] > fEnd {
 			break
 		}
+		lastIndex = i
 
 		// 跳过前period个数据（布林带计算需要）
 		if i < period {
@@ -595,7 +606,7 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 	}
 
 	// 如果回测结束时还有持仓，强制平仓
-	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -629,6 +640,7 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 
 	capital := initialCapital
 	position := 0.0
+	lastIndex := -1
 
 	startIndex := 0
 	for i, d := range allDates {
@@ -642,6 +654,7 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 		if fEnd != "" && allDates[i] > fEnd {
 			break
 		}
+		lastIndex = i
 
 		// 跳过前period个数据（RSI计算需要）
 		if i < period {
@@ -677,7 +690,7 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 	}
 
 	// 如果回测结束时还有持仓，强制平仓
-	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -711,6 +724,7 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 
 	capital := initialCapital
 	position := 0.0
+	lastIndex := -1
 
 	startIndex := 0
 	for i, d := range allDates {
@@ -724,6 +738,7 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 		if fEnd != "" && allDates[i] > fEnd {
 			break
 		}
+		lastIndex = i
 
 		// 跳过前period个数据（SMA计算需要）
 		if i < period {
@@ -759,7 +774,7 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 	}
 
 	// 如果回测结束时还有持仓，强制平仓
-	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital
@@ -796,6 +811,7 @@ func (a *App) runKDJ(allDates []string, allHighs []float64, allLows []float64, a
 
 	capital := initialCapital
 	position := 0.0
+	lastIndex := -1
 
 	startIndex := 0
 	for i, dt := range allDates {
@@ -809,6 +825,7 @@ func (a *App) runKDJ(allDates []string, allHighs []float64, allLows []float64, a
 		if fEnd != "" && allDates[i] > fEnd {
 			break
 		}
+		lastIndex = i
 
 		// 跳过前period+参数周期的数据（KDJ计算需要）
 		if i < period+kSmoothing+dSmoothing {
@@ -844,7 +861,7 @@ func (a *App) runKDJ(allDates []string, allHighs []float64, allLows []float64, a
 	}
 
 	// 如果回测结束时还有持仓，强制平仓
-	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart)
+	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
 	if logs == nil { logs = []TradeLog{} }
 	finalVal := initialCapital

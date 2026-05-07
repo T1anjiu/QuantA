@@ -420,13 +420,10 @@ function renderChart(res) {
 
         // 创建成交量数据
         const volumeData = ohlcData.map(item => {
-            const ohlcItem = res.ohlc_data.find(d => {
-                const t = d.date.substring(0, 4) + '-' + d.date.substring(4, 6) + '-' + d.date.substring(6, 8);
-                return t === item.time;
-            });
+            const detail = ohlcDetailMap[item.time] || {};
             return {
                 time: item.time,
-                value: ohlcItem ? (ohlcItem.volume || 0) : 0,
+                value: detail.volume || 0,
                 color: item.close >= item.open ? 'rgba(239,68,68,0.5)' : 'rgba(16,185,129,0.5)',
             };
         });
