@@ -416,6 +416,9 @@ func (a *App) RunBacktest(symbol string, initialCapital float64, startDate strin
 
 	fStart := strings.ReplaceAll(startDate, "-", "")
 	fEnd := strings.ReplaceAll(endDate, "-", "")
+	if fStart != "" && fEnd != "" && fStart > fEnd {
+		return BacktestResult{}, fmt.Errorf("开始日期不能晚于结束日期")
+	}
 
 	var result BacktestResult
 

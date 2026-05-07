@@ -569,6 +569,7 @@ function getParamString(indicator) {
 // 点击运行（处理收益颜色和符号，以及最终资产数字颜色）
 document.getElementById('runBtn').onclick = async () => {
     const btn = document.getElementById('runBtn');
+    const errorDiv = document.getElementById('errorMsg');
     btn.innerText = "正在运行...";
     try {
         const indicator = document.getElementById('inIndicator').value;
@@ -601,6 +602,9 @@ document.getElementById('runBtn').onclick = async () => {
             endDate: document.getElementById('inEnd').value || '至今'
         };
 
+        errorDiv.innerText = '';
+        errorDiv.style.display = 'none';
+
         // 最终资产数字颜色：亮色模式黑色，暗色模式白色
         const capElement = document.getElementById('resCap');
         capElement.innerText = `¥ ${res.final_capital.toLocaleString()}`;
@@ -631,7 +635,6 @@ document.getElementById('runBtn').onclick = async () => {
         renderChart(res);
         renderLogs(res.logs);
      } catch (e) {
-         const errorDiv = document.getElementById('errorMsg');
          errorDiv.innerText = `错误: ${e.message || e}`;
          errorDiv.style.display = 'block';
          setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
