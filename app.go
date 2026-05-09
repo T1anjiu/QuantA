@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -10,6 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	gostox "github.com/T1anjiu/gostox"
+	"github.com/T1anjiu/gostox/providers/eastmoney"
+	"github.com/T1anjiu/gostox/providers/sina"
+	"github.com/T1anjiu/gostox/providers/tencent"
 	"github.com/markcheno/go-talib"
 )
 
@@ -20,24 +26,24 @@ type TradeLog struct {
 }
 
 type StockOHLC struct {
-	Dates  []string
-	Opens  []float64
-	Highs  []float64
-	Lows   []float64
-	Closes []float64
+	Dates   []string
+	Opens   []float64
+	Highs   []float64
+	Lows    []float64
+	Closes  []float64
 	Volumes []float64
 	Amounts []float64
 }
 
 type OHLCOne struct {
-	Date    string  `json:"date"`
-	Open    float64 `json:"open"`
-	High    float64 `json:"high"`
-	Low     float64 `json:"low"`
-	Close   float64 `json:"close"`
-	Volume  float64 `json:"volume"`
-	Amount  float64 `json:"amount"`
-	Change  float64 `json:"change"`
+	Date   string  `json:"date"`
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
+	Amount float64 `json:"amount"`
+	Change float64 `json:"change"`
 }
 
 // 安全地将 interface{} 转换为 float64，返回错误
@@ -223,33 +229,76 @@ func forceClosePosition(position *float64, capital *float64, allDates []string, 
 }
 
 type App struct {
-	ctx context.Context
+	ctx          context.Context
+	dataSource   string
+	gostoxClient *gostox.Client
 }
 
-func NewApp() *App { return &App{} }
+func NewApp() *App {
+	return &App{
+		dataSource: "tencent_proxy",
+		gostoxClient: gostox.NewClient(
+			eastmoney.NewProvider(),
+			sina.NewProvider(),
+			tencent.NewProvider(),
+		),
+	}
+}
+
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
-// 核心函数：回归腾讯 proxy 接口
-func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
-	result := StockOHLC{}
+func normalizeSymbol(symbol string) (string, error) {
 	pureSymbol := strings.TrimSpace(symbol)
 	if pureSymbol == "" {
-		return result, fmt.Errorf("股票代码不能为空")
+		return "", fmt.Errorf("股票代码不能为空")
 	}
-	
+
+	pureSymbol = strings.ToUpper(pureSymbol)
+	pureSymbol = strings.TrimPrefix(pureSymbol, "SH")
+	pureSymbol = strings.TrimPrefix(pureSymbol, "SZ")
 	pureSymbol = strings.ReplaceAll(pureSymbol, ".SH", "")
 	pureSymbol = strings.ReplaceAll(pureSymbol, ".SZ", "")
-	
-	// 验证股票代码格式：只允许数字，长度6位
+
 	if len(pureSymbol) != 6 {
-		return result, fmt.Errorf("股票代码格式错误（必须为6位数字）: %s", symbol)
+		return "", fmt.Errorf("股票代码格式错误（必须为6位数字）: %s", symbol)
 	}
 	for _, c := range pureSymbol {
 		if c < '0' || c > '9' {
-			return result, fmt.Errorf("股票代码包含非法字符（只允许数字）: %s", symbol)
+			return "", fmt.Errorf("股票代码包含非法字符（只允许数字）: %s", symbol)
 		}
 	}
-	
+
+	return pureSymbol, nil
+}
+
+func (a *App) GetDataSource() string {
+	if a.dataSource == "" {
+		return "tencent_proxy"
+	}
+	return a.dataSource
+}
+
+func (a *App) SetDataSource(source string) error {
+	switch source {
+	case "", "tencent_proxy":
+		a.dataSource = "tencent_proxy"
+		return nil
+	case "gostox":
+		a.dataSource = "gostox"
+		return nil
+	default:
+		return fmt.Errorf("不支持的数据源: %s", source)
+	}
+}
+
+// 核心函数：回归腾讯 proxy 接口
+func (a *App) fetchStockDataTencentProxy(symbol string) (StockOHLC, error) {
+	result := StockOHLC{}
+	pureSymbol, err := normalizeSymbol(symbol)
+	if err != nil {
+		return result, err
+	}
+
 	// 判定前缀
 	prefix := "sz"
 	if strings.HasPrefix(pureSymbol, "6") || strings.HasPrefix(pureSymbol, "5") || strings.HasPrefix(pureSymbol, "688") {
@@ -316,7 +365,9 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 		if !ok {
 			continue
 		}
-		if len(line) < 5 { continue }
+		if len(line) < 5 {
+			continue
+		}
 
 		// line[0]=日期
 		dateStr, ok := line[0].(string)
@@ -395,6 +446,77 @@ func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
 	result.Volumes = volumes
 	result.Amounts = amounts
 	return result, nil
+}
+
+func (a *App) fetchStockDataGoStox(symbol string) (StockOHLC, error) {
+	result := StockOHLC{}
+	pureSymbol, err := normalizeSymbol(symbol)
+	if err != nil {
+		return result, err
+	}
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	code := gostox.InferMarket(pureSymbol)
+	klines, err := a.gostoxClient.GetKline(ctx, code, gostox.KlinePeriodDay, 1100)
+	if err != nil {
+		var partialErr *gostox.PartialError
+		if !errors.As(err, &partialErr) {
+			return result, err
+		}
+		if len(klines) == 0 {
+			return result, err
+		}
+	}
+	if len(klines) == 0 {
+		return result, fmt.Errorf("股票代码 %s 无K线数据", symbol)
+	}
+
+	dates := make([]string, 0, len(klines))
+	opens := make([]float64, 0, len(klines))
+	highs := make([]float64, 0, len(klines))
+	lows := make([]float64, 0, len(klines))
+	closes := make([]float64, 0, len(klines))
+	volumes := make([]float64, 0, len(klines))
+	amounts := make([]float64, 0, len(klines))
+
+	for _, k := range klines {
+		if k == nil || k.Timestamp.IsZero() {
+			continue
+		}
+		dates = append(dates, k.Timestamp.Format("20060102"))
+		opens = append(opens, k.Open)
+		highs = append(highs, k.High)
+		lows = append(lows, k.Low)
+		closes = append(closes, k.Close)
+		volumes = append(volumes, float64(k.Volume))
+		amounts = append(amounts, k.Amount)
+	}
+
+	if len(dates) == 0 {
+		return result, fmt.Errorf("未找到有效 K 线数据")
+	}
+
+	result.Dates = dates
+	result.Opens = opens
+	result.Highs = highs
+	result.Lows = lows
+	result.Closes = closes
+	result.Volumes = volumes
+	result.Amounts = amounts
+	return result, nil
+}
+
+func (a *App) fetchStockData(symbol string) (StockOHLC, error) {
+	if a.GetDataSource() == "gostox" {
+		return a.fetchStockDataGoStox(symbol)
+	}
+	return a.fetchStockDataTencentProxy(symbol)
 }
 
 // RunBacktest 支持多指标
@@ -527,7 +649,9 @@ func (a *App) runMACD(allDates []string, allCloses []float64, fStart string, fEn
 	// 如果回测结束时还有持仓，强制平仓
 	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
-	if logs == nil { logs = []TradeLog{} }
+	if logs == nil {
+		logs = []TradeLog{}
+	}
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
 		finalVal = filteredChart[len(filteredChart)-1]
@@ -611,7 +735,9 @@ func (a *App) runBOLL(allDates []string, allCloses []float64, fStart string, fEn
 	// 如果回测结束时还有持仓，强制平仓
 	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
-	if logs == nil { logs = []TradeLog{} }
+	if logs == nil {
+		logs = []TradeLog{}
+	}
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
 		finalVal = filteredChart[len(filteredChart)-1]
@@ -695,7 +821,9 @@ func (a *App) runRSI(allDates []string, allCloses []float64, fStart string, fEnd
 	// 如果回测结束时还有持仓，强制平仓
 	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
-	if logs == nil { logs = []TradeLog{} }
+	if logs == nil {
+		logs = []TradeLog{}
+	}
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
 		finalVal = filteredChart[len(filteredChart)-1]
@@ -779,7 +907,9 @@ func (a *App) runSMA(allDates []string, allCloses []float64, fStart string, fEnd
 	// 如果回测结束时还有持仓，强制平仓
 	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
-	if logs == nil { logs = []TradeLog{} }
+	if logs == nil {
+		logs = []TradeLog{}
+	}
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
 		finalVal = filteredChart[len(filteredChart)-1]
@@ -866,7 +996,9 @@ func (a *App) runKDJ(allDates []string, allHighs []float64, allLows []float64, a
 	// 如果回测结束时还有持仓，强制平仓
 	forceClosePosition(&position, &capital, allDates, allCloses, &logs, filteredChart, lastIndex)
 
-	if logs == nil { logs = []TradeLog{} }
+	if logs == nil {
+		logs = []TradeLog{}
+	}
 	finalVal := initialCapital
 	if len(filteredChart) > 0 {
 		finalVal = filteredChart[len(filteredChart)-1]

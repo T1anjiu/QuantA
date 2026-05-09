@@ -1,5 +1,5 @@
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
-import { RunBacktest } from '../wailsjs/go/main/App';
+import { GetDataSource, RunBacktest, SetDataSource } from '../wailsjs/go/main/App';
 
 // 1. 注入 CSS 样式（仅修改了颜色变量，买入红、卖出绿）
 const style = document.createElement('style');
@@ -154,8 +154,18 @@ document.querySelector('#app').innerHTML = `
             <b style="color:var(--accent)">⚙️ 设置</b>
             <button id="backBtn" style="font-size:14px; background:transparent; border:1px solid var(--border); cursor:pointer; color:var(--text-main); padding:6px 12px; border-radius:6px;">← 返回</button>
         </div>
-        <div style="padding:30px; text-align:center; color:gray; font-size:14px;">
-            设置页面（后续可添加数据源、字体大小等功能）
+        <div style="padding:30px; max-width:560px; margin:0 auto; color:var(--text-main); font-size:14px;">
+            <div style="padding:18px; border:1px solid var(--border); border-radius:10px; background:var(--bg-side); text-align:left;">
+                <div style="font-size:12px; color:gray; margin-bottom:8px;">数据源</div>
+                <select id="dataSourceSelect" class="input-field" style="margin-bottom:10px;">
+                    <option value="tencent_proxy">腾讯代理接口（当前默认）</option>
+                    <option value="gostox">GoStox 库（多 Provider）</option>
+                </select>
+                <div id="dataSourceHint" style="font-size:12px; color:gray; line-height:1.6;">
+                    腾讯代理接口直接抓取腾讯前复权日 K。GoStox 使用你本地接入的东方财富 / 新浪 / 腾讯库做统一拉取。
+                </div>
+                <div id="settingsMsg" style="display:none; margin-top:12px; font-size:12px;"></div>
+            </div>
         </div>
     </div>
     <button id="settingsBtn" title="设置" style="position:fixed; top:15px; right:20px; z-index:9999; font-size:18px; background:transparent; border:none; cursor:pointer; color:var(--text-main);">⚙️</button>
@@ -163,17 +173,42 @@ document.querySelector('#app').innerHTML = `
 
 // 3. 核心逻辑
 let myChart = null, currentTheme = 'dark', lastRes = null;
+let currentDataSource = 'tencent_proxy';
 let currentParams = {
     symbol: '',
     indicator: '',
     indicatorName: '',
     params: '',
     startDate: '',
-    endDate: ''
+    endDate: '',
+    dataSourceLabel: '腾讯代理接口'
 };
 
 function getThemeVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function getDataSourceLabel(source) {
+    return source === 'gostox' ? 'GoStox 库' : '腾讯代理接口';
+}
+
+async function loadDataSourceSetting() {
+    try {
+        currentDataSource = await GetDataSource();
+    } catch (_) {
+        currentDataSource = 'tencent_proxy';
+    }
+    const select = document.getElementById('dataSourceSelect');
+    if (select) {
+        select.value = currentDataSource;
+    }
+}
+
+function showSettingsMessage(message, success) {
+    const msg = document.getElementById('settingsMsg');
+    msg.textContent = message;
+    msg.style.display = 'block';
+    msg.style.color = success ? '#10b981' : '#ef4444';
 }
 
 // 渲染日志（买入红色、卖出绿色，由 CSS 类控制，颜色变量已互换）
@@ -599,7 +634,8 @@ document.getElementById('runBtn').onclick = async () => {
             indicatorName: indicatorNames[indicator] || indicator,
             params: getParamString(indicator),
             startDate: document.getElementById('inStart').value || '起始',
-            endDate: document.getElementById('inEnd').value || '至今'
+            endDate: document.getElementById('inEnd').value || '至今',
+            dataSourceLabel: getDataSourceLabel(currentDataSource)
         };
 
         errorDiv.innerText = '';
@@ -672,6 +708,18 @@ document.getElementById('backBtn').onclick = () => {
     document.getElementById('app-frame').style.display = 'flex';
 };
 
+document.getElementById('dataSourceSelect').onchange = async (event) => {
+    const nextSource = event.target.value;
+    try {
+        await SetDataSource(nextSource);
+        currentDataSource = nextSource;
+        showSettingsMessage(`已切换到${getDataSourceLabel(nextSource)}`, true);
+    } catch (e) {
+        event.target.value = currentDataSource;
+        showSettingsMessage(`切换失败: ${e.message || e}`, false);
+    }
+};
+
 window.onresize = () => {
     if (myChart) {
         const container = document.getElementById('chart-box');
@@ -712,6 +760,7 @@ document.getElementById('exportBtn').onclick = async () => {
         // 左上角信息
         const info = [
             `股票代码: ${currentParams.symbol}`,
+            `数据源: ${currentParams.dataSourceLabel}`,
             `指标: ${currentParams.indicatorName} (${currentParams.params})`,
             `回测时间: ${currentParams.startDate} ~ ${currentParams.endDate}`,
             `最终资产: ¥${lastRes.final_capital.toLocaleString()}`,
@@ -759,3 +808,5 @@ document.getElementById('exportBtn').onclick = async () => {
     
     btn.innerText = "导出图表 / EXPORT";
 };
+
+loadDataSourceSetting();

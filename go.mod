@@ -3,6 +3,7 @@ module quantA
 go 1.25.0
 
 require (
+	github.com/T1anjiu/gostox v0.1.0
 	github.com/markcheno/go-talib v0.0.0-20250114000313-ec55a20c902f
 	github.com/wailsapp/wails/v2 v2.12.0
 )
